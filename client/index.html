@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Three-Player Chess</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main id="home" class="card" hidden>
+    <h1>Three-Player Chess</h1>
+    <p>Play with two friends, wherever they are.</p>
+    <button id="create" class="primary">Create a game</button>
+    <button id="solo">Analysis board</button>
+    <form id="join-form">
+      <label for="join-code">Or enter a game code</label>
+      <div class="row">
+        <input id="join-code" maxlength="6" autocomplete="off" spellcheck="false">
+        <button type="submit">Join</button>
+      </div>
+    </form>
+  </main>
+
+  <main id="lobby" class="card" hidden>
+    <h1>Waiting for players</h1>
+    <p>Send this link to your friends. The game starts once all three seats are taken.</p>
+    <div class="row">
+      <input id="share-link" readonly>
+      <button id="copy-link">Copy</button>
+    </div>
+    <label for="name">Your name</label>
+    <input id="name" maxlength="24" autocomplete="off">
+    <div id="seats"></div>
+  </main>
+
+  <main id="game" hidden>
+    <div id="board-wrap"><svg id="board" viewBox="-400 -400 800 800" role="img" aria-label="Game board"></svg></div>
+    <aside>
+      <p id="status" role="status"></p>
+      <ul id="players"></ul>
+      <ol id="log"></ol>
+      <div id="promotion" hidden>
+        <p>Promote to:</p>
+        <div id="promotion-options"></div>
+      </div>
+      <button id="resign">Resign</button>
+    </aside>
+  </main>
+
+  <p id="toast" role="alert" hidden></p>
+  <script type="module" src="/client.js"></script>
+</body>
+</html>
