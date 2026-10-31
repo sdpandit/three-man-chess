@@ -1,7 +1,7 @@
 import {
   RANKS, FILES, SQUARES, COLORS, COLOR_NAMES, PROMOTIONS,
   rankOf, fileOf, isLightSquare, legalMoves, isInCheck, createGame, applyMove, resign,
-} from '/engine.js';
+} from './engine.js';
 
 const $ = (id) => document.getElementById(id);
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -377,5 +377,6 @@ $('resign').addEventListener('click', () => {
 });
 $('name').value = localStorage.getItem('tpc-name') ?? '';
 
-if (new URL(location.href).searchParams.has('solo')) startSolo();
+// GitHub Pages has no game server, so that copy of the site is only the analysis board.
+if (location.hostname.endsWith('.github.io') || new URL(location.href).searchParams.has('solo')) startSolo();
 else connect();
