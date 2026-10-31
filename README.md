@@ -18,6 +18,8 @@ Then open http://localhost:3000. Run the tests with `npm test`.
 
 To try it alone, open http://localhost:3000/?solo to play all three colours from one window. Solo games aren't saved.
 
+A copy of the analysis board, without online play, is at https://sdpandit.github.io/three-man-chess/.
+
 ## Put it online
 
 Friends in other cities need a public address. Either of these works:
