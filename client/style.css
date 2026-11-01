@@ -1,6 +1,7 @@
 :root {
   --bg: #2b211a;
   --panel: #3a2d23;
+  --panel-light: #4d3e32;
   --text: #f3e9dc;
   --muted: #bda98f;
   --accent: #d9a441;
@@ -108,7 +109,7 @@ aside {
   list-style: none;
   margin: 0;
   padding: 4px 13px;
-  background: var(--panel);
+  background: var(--panel-light);
   border-radius: 8px;
 }
 #players li { padding: 5px 0; overflow-wrap: anywhere; }
@@ -125,7 +126,7 @@ aside {
   list-style: none;
   overflow-y: auto;
   font-size: 14px;
-  background: var(--panel);
+  background: var(--panel-light);
   border-radius: 8px;
 }
 
@@ -140,7 +141,7 @@ aside {
   white-space: nowrap;
 }
 .log-square { margin-right: 4px; border-radius: 2px; }
-#log li.current { background: var(--line); border-radius: 4px; }
+#log li.current { background: #7a6552; border-radius: 4px; }
 .log-move {
   display: block;
   width: 100%;
