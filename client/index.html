@@ -40,16 +40,29 @@
       <p id="status" role="status"></p>
       <ul id="players"></ul>
       <ol id="log"></ol>
-      <div id="history-nav" hidden>
-        <button id="history-back" aria-label="Previous move">&#9664;</button>
-        <button id="history-forward" aria-label="Next move">&#9654;</button>
-        <button id="history-latest">Latest</button>
+      <div id="history-nav">
+        <button id="history-back" aria-label="Previous move" title="Previous move">&#9664;</button>
+        <button id="history-forward" aria-label="Next move" title="Next move">&#9654;</button>
+        <button id="undo" aria-label="Undo" title="Undo">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/></svg>
+        </button>
+        <button id="history-start" aria-label="Back to start" title="Back to start">&#9664;&#9664;</button>
+        <button id="history-latest" aria-label="Latest move" title="Latest move">&#9654;&#9654;</button>
+        <button id="resign" aria-label="Resign" title="Resign">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.4 6L14 4H5v17h2v-7h5.6l.4 2h7V6z"/></svg>
+        </button>
       </div>
+      <section id="chat" aria-label="Chat" hidden>
+        <ul id="chat-messages"></ul>
+        <form id="chat-form">
+          <input id="chat-input" maxlength="300" autocomplete="off" placeholder="Talk some trash..." aria-label="Chat message">
+          <button type="submit">Send</button>
+        </form>
+      </section>
       <div id="promotion" hidden>
         <p>Promote to:</p>
         <div id="promotion-options"></div>
       </div>
-      <button id="resign">Resign</button>
     </aside>
   </main>
 

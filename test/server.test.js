@@ -100,6 +100,23 @@ test('three clients play a game; the server enforces the rules and survives a re
     assert.equal(moved.game.board[sq(2, 0)].color, 'w');
     assert.deepEqual(moved.game.history, [{ from: sq(1, 0), to: sq(2, 0), logEnd: 1 }]);
 
+    // Chat reaches everyone, and only seated players can write in it.
+    w.send({ type: 'chat', text: '  <b>nice move</b>  ' });
+    const said = await watcher.until((m) => m.type === 'chat');
+    assert.deepEqual(said.message, { color: 'w', name: 'Ann', text: '<b>nice move</b>' });
+    await g.until((m) => m.type === 'chat');
+    watcher.send({ type: 'chat', text: 'hello' });
+    assert.match((await watcher.until((m) => m.type === 'error')).message, /Only players/);
+    await sleep(300);
+    g.send({ type: 'chat', text: 'x'.repeat(1000) });
+    assert.equal((await b.until((m) => m.type === 'chat' && m.message.color === 'g')).message.text.length, 300);
+    g.send({ type: 'chat', text: 'too fast' });
+    assert.match((await g.until((m) => m.type === 'error')).message, /Slow down/);
+    await sleep(300);
+    b.send({ type: 'chat', text: '   ' });
+    b.send({ type: 'chat', text: 'after blank' });
+    assert.equal((await w.until((m) => m.type === 'chat' && m.message.color === 'b')).message.text, 'after blank');
+
     // Garbage must only produce an error.
     w.ws.send('not json');
     await w.until((m) => m.type === 'error');
@@ -115,6 +132,9 @@ test('three clients play a game; the server enforces the rules and survives a re
     // Reconnecting with the token gets the seat and the game back.
     const back = await client();
     back.send({ type: 'join', code, token: whiteToken });
+    const history = await back.until((m) => m.type === 'chatHistory');
+    assert.deepEqual(history.messages.map((m) => m.color), ['w', 'g', 'b'], 'chat survives a restart');
+    assert.equal(JSON.stringify(history).includes(whiteToken), false);
     const restored = await back.until((m) => m.type === 'room');
     assert.equal(restored.you, 'w');
     assert.equal(restored.game.turn, 'g');

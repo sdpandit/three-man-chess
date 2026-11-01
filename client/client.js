@@ -53,6 +53,19 @@ function playSolo(message) {
   renderGame();
 }
 
+// Takes back the latest action. Solo mode only: online, the server owns the game.
+function undoSolo() {
+  const step = room.game.history.length - 1;
+  if (!solo || step < 0) return;
+  room.game = positionAt(step);
+  positions.length = step + 1;
+  room.you = room.game.turn;
+  selected = null;
+  pendingPromotion = null;
+  viewStep = null;
+  renderGame();
+}
+
 function send(message) {
   if (solo) {
     playSolo(message);
@@ -97,6 +110,11 @@ function connect() {
       localStorage.setItem(tokenKey(message.code), message.token);
     } else if (message.type === 'room') {
       receiveRoom(message);
+    } else if (message.type === 'chatHistory') {
+      $('chat-messages').replaceChildren();
+      message.messages.forEach(addChatMessage);
+    } else if (message.type === 'chat') {
+      addChatMessage(message.message);
     }
   };
 }
@@ -325,8 +343,10 @@ function goToStep(step) {
 }
 
 // Moves are logged as "White: d2-d4" and shown with a coloured square for the name.
+const colorOfLine = (line) => COLORS.find((c) => line.startsWith(`${COLOR_NAMES[c]}: `));
+
 function fillLogLine(element, line) {
-  const color = COLORS.find((c) => line.startsWith(`${COLOR_NAMES[c]}: `));
+  const color = colorOfLine(line);
   if (!color) {
     element.textContent = line;
     return;
@@ -343,9 +363,19 @@ function renderLog() {
   const moves = game.history ?? [];
   const log = $('log');
   let index = 0;
+  // One row per round, with a column for each colour. Events like a resignation
+  // get a row of their own, and moves resume in their own column on the next.
+  let row = 0;
+  let lastColumn = Infinity;
   log.replaceChildren(...game.log.map((line, lineNumber) => {
     while (index < moves.length && moves[index].logEnd <= lineNumber) index++;
     const entry = document.createElement('li');
+    const color = colorOfLine(line);
+    const column = color ? COLORS.indexOf(color) : null;
+    if (column === null || column <= lastColumn) row++;
+    lastColumn = column ?? Infinity;
+    entry.style.gridRow = row;
+    entry.style.gridColumn = column === null ? '1 / -1' : column + 1;
     if (index === moves.length) {
       fillLogLine(entry, line);
       return entry;
@@ -364,10 +394,28 @@ function renderLog() {
     ? log.scrollHeight
     : current.offsetTop - log.clientHeight / 2;
 
-  $('history-nav').hidden = !game.history;
   $('history-back').disabled = currentStep() === 0;
+  $('history-start').disabled = currentStep() === 0;
   $('history-forward').disabled = viewStep === null;
   $('history-latest').disabled = viewStep === null;
+  $('undo').disabled = !solo || !game.history?.length;
+}
+
+// ---- Chat ----
+
+function addChatMessage({ color, name, text }) {
+  const list = $('chat-messages');
+  // Don't pull someone back down if they've scrolled up to read.
+  const atBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 4;
+  const entry = document.createElement('li');
+  const swatch = document.createElement('span');
+  swatch.className = `swatch ${color}`;
+  const author = document.createElement('span');
+  author.className = 'chat-name';
+  author.textContent = `${name}: `;
+  entry.append(swatch, author, text);
+  list.append(entry);
+  if (atBottom) list.scrollTop = list.scrollHeight;
 }
 
 // ---- Side panel ----
@@ -439,11 +487,13 @@ function renderPanel() {
   }
 
   const live = room.game;
-  $('resign').hidden = !room.you || live.status !== 'active' || !live.alive[room.you];
+  $('resign').disabled = !room.you || live.status !== 'active' || !live.alive[room.you];
 }
 
 function renderGame() {
   show('game');
+  $('chat').hidden = solo;
+  $('chat-form').hidden = !room.you;
   renderBoard();
   renderPanel();
 }
@@ -471,8 +521,17 @@ $('resign').addEventListener('click', () => {
   viewStep = null;
   send({ type: 'resign' });
 });
+$('undo').addEventListener('click', undoSolo);
+$('chat-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const text = $('chat-input').value.trim();
+  if (!text) return;
+  send({ type: 'chat', text });
+  $('chat-input').value = '';
+});
 $('history-back').addEventListener('click', () => goToStep(currentStep() - 1));
 $('history-forward').addEventListener('click', () => goToStep(currentStep() + 1));
+$('history-start').addEventListener('click', () => goToStep(0));
 $('history-latest').addEventListener('click', () => goToStep(room.game.history.length));
 document.addEventListener('keydown', (event) => {
   if ($('game').hidden || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;

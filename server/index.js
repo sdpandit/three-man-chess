@@ -14,6 +14,9 @@ const PORT = Number(process.env.PORT) || 3000;
 const DATA_FILE = process.env.DATA_FILE || path.join(ROOT, 'data', 'games.json');
 const ROOM_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_ROOMS = 1000;
+const MAX_CHAT_MESSAGES = 200;
+const MAX_CHAT_LENGTH = 300;
+const CHAT_COOLDOWN_MS = 250;
 
 // Only these files are ever served, so there is no path handling to get wrong.
 const STATIC_FILES = {
@@ -33,6 +36,7 @@ function loadRooms() {
     for (const room of JSON.parse(readFileSync(DATA_FILE, 'utf8'))) {
       // Games saved before moats existed keep playing with all three.
       if (room.game) room.game.moats ??= createGame().moats;
+      room.chat ??= [];
       rooms.set(room.code, room);
     }
     console.log(`Restored ${rooms.size} game(s) from ${DATA_FILE}`);
@@ -78,7 +82,7 @@ function newRoom() {
   do {
     code = [...randomBytes(6)].map((b) => alphabet[b % alphabet.length]).join('');
   } while (rooms.has(code));
-  const room = { code, game: null, seats: { w: null, g: null, b: null }, updatedAt: Date.now() };
+  const room = { code, game: null, seats: { w: null, g: null, b: null }, chat: [], updatedAt: Date.now() };
   rooms.set(code, room);
   scheduleSave();
   return room;
@@ -130,6 +134,7 @@ const handlers = {
     if (!room) throw new Error('That game does not exist');
     const color = COLORS.find((c) => token && room.seats[c]?.token === token) ?? null;
     attach(socket, room, color);
+    send(socket, { type: 'chatHistory', messages: room.chat });
     broadcast(room);
   },
 
@@ -158,6 +163,23 @@ const handlers = {
     room.game = applyMove(room.game, { from, to, promotion });
     touch(room);
     broadcast(room);
+  },
+
+  // Anyone with the link can read the chat, but only seated players can write in it.
+  chat(socket, { text }) {
+    const room = socket.room;
+    const color = room && sockets.get(room.code).get(socket);
+    if (!room?.game || !color) throw new Error('Only players can chat');
+    const clean = String(text ?? '').trim().slice(0, MAX_CHAT_LENGTH);
+    if (!clean) return;
+    const now = Date.now();
+    if (now - (socket.lastChatAt ?? 0) < CHAT_COOLDOWN_MS) throw new Error('Slow down a little');
+    socket.lastChatAt = now;
+    const message = { color, name: room.seats[color].name, text: clean };
+    room.chat.push(message);
+    room.chat.splice(0, room.chat.length - MAX_CHAT_MESSAGES);
+    touch(room);
+    for (const client of sockets.get(room.code).keys()) send(client, { type: 'chat', message });
   },
 
   resign(socket) {

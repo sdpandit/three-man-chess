@@ -21,7 +21,10 @@ To try it alone, open http://localhost:3000/?solo to play all three colours from
 A copy of the analysis board, without online play, is at https://sdpandit.github.io/three-man-chess/.
 
 During a game, click any move in the history or use the left and right arrow keys to
-look at past positions. Moves can only be made from the latest position.
+look at past positions. Moves can only be made from the latest position. Undo only works
+on the analysis board, and is greyed out in online games.
+
+Online games also have a chat. Players can write in it, and anyone with the game link can read it.
 
 ## Put it online
 
