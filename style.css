@@ -118,7 +118,7 @@ aside {
 #players .dead { text-decoration: line-through; color: var(--muted); }
 
 #log {
-  flex: 1 1 auto;
+  flex: 0 1 180px;
   min-height: 80px;
   margin: 0;
   padding: 9px 13px;
@@ -129,21 +129,50 @@ aside {
   border-radius: 8px;
 }
 
-#log { position: relative; }
-.log-square { border-radius: 2px; }
+#log {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-auto-rows: min-content;
+  align-content: start;
+  column-gap: 2px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.log-square { margin-right: 4px; border-radius: 2px; }
 #log li.current { background: var(--line); border-radius: 4px; }
 .log-move {
   display: block;
   width: 100%;
-  padding: 1px 5px;
+  padding: 1px 3px;
   font-size: inherit;
   text-align: left;
   background: none;
 }
 .log-move:hover { background: rgba(255, 255, 255, .08); }
 
-#history-nav { display: flex; gap: 6px; }
-#history-nav button { flex: 1; }
+#history-nav { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+#history-nav button { letter-spacing: -2px; }
+#resign { background: #8c3a2e; }
+#history-nav svg { display: block; width: 18px; height: 18px; margin: auto; fill: currentColor; }
+
+#chat { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+#chat-messages {
+  flex: 0 1 210px;
+  min-height: 60px;
+  margin: 0;
+  padding: 9px 13px;
+  list-style: none;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  background: var(--panel);
+  border-radius: 8px;
+}
+#chat-messages .chat-name { font-weight: 600; }
+#chat-form { display: flex; gap: 6px; }
+#chat-input { flex: 1; min-width: 0; padding: 6px 9px; font-size: 14px; }
+#chat-form button { padding: 6px 11px; font-size: 14px; }
 
 #promotion p { margin: 0 0 6px; font-weight: 600; }
 #promotion-options { display: flex; gap: 6px; }
@@ -193,6 +222,7 @@ aside {
   #game { flex-direction: column; align-items: stretch; padding: 8px; }
   #board-wrap { flex: none; }
   aside { flex: none; max-height: none; }
-  #log { max-height: 180px; }
+  #log { flex: none; height: 140px; }
+  #chat-messages { flex: none; height: 190px; }
   .card { margin: 16px; }
 }
