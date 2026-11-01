@@ -162,6 +162,9 @@ export function createGame() {
     winner: null,
     lastMove: null,
     log: [],
+    // Each action, with where its lines end in the log, so past positions can be
+    // rebuilt by replaying. Games saved before this existed have no history.
+    history: [],
   };
 }
 
@@ -295,24 +298,30 @@ function remainingMoats(board, moats, alive) {
   }));
 }
 
-// Legal moves for `color`, optionally only those of the piece on `from`.
-export function legalMoves(state, color = state.turn, from = null) {
-  if (state.status !== 'active' || !state.alive[color]) return [];
-  const moves = [];
-  state.board.forEach((piece, square) => {
-    if (!piece || piece.color !== color) return;
-    if (from !== null && square !== from) return;
+function* generateLegalMoves(state, color, from) {
+  if (state.status !== 'active' || !state.alive[color]) return;
+  for (let square = 0; square < SQUARES; square++) {
+    const piece = state.board[square];
+    if (!piece || piece.color !== color) continue;
+    if (from !== null && square !== from) continue;
     for (const move of pseudoMoves(state, square)) {
       // Taking a king turns its army to corpses, which then give no check.
       const victim = capturesLivingKing(state, move);
       const board = moveOnBoard(state.board, move);
       const alive = victim ? { ...state.alive, [victim]: false } : state.alive;
       const after = { ...state, board, alive, moats: remainingMoats(board, state.moats, alive) };
-      if (!isInCheck(after, color)) moves.push(move);
+      if (!isInCheck(after, color)) yield move;
     }
-  });
-  return moves;
+  }
 }
+
+// Legal moves for `color`, optionally only those of the piece on `from`.
+export function legalMoves(state, color = state.turn, from = null) {
+  return [...generateLegalMoves(state, color, from)];
+}
+
+// Stops at the first move found, since this runs after every move played.
+const hasLegalMove = (state, color) => !generateLegalMoves(state, color, null).next().done;
 
 function kill(state, color) {
   state.alive[color] = false;
@@ -334,7 +343,7 @@ function advanceTurn(state) {
     color = COLORS[(COLORS.indexOf(color) + 1) % COLORS.length];
     if (!state.alive[color]) continue;
     state.turn = color;
-    if (legalMoves(state, color).length > 0) return;
+    if (hasLegalMove(state, color)) return;
     // Stalemate only counts as a draw once it's down to two players.
     if (isInCheck(state, color) || COLORS.every((c) => state.alive[c])) {
       state.log.push(`${COLOR_NAMES[color]} is checkmated`);
@@ -383,6 +392,7 @@ export function applyMove(state, { from, to, promotion }) {
     kill(next, victim);
   }
   advanceTurn(next);
+  next.history?.push({ from, to, ...(promotion && { promotion }), logEnd: next.log.length });
   return next;
 }
 
@@ -392,5 +402,10 @@ export function resign(state, color) {
   next.log.push(`${COLOR_NAMES[color]} resigns`);
   kill(next, color);
   if (next.turn === color) advanceTurn(next);
+  next.history?.push({ resign: color, logEnd: next.log.length });
   return next;
+}
+
+export function replayAction(state, action) {
+  return action.resign ? resign(state, action.resign) : applyMove(state, action);
 }

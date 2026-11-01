@@ -102,6 +102,7 @@ aside {
   border-radius: 8px;
 }
 #status.yours { background: var(--accent); color: #2b211a; }
+#status.viewing { background: #35566e; }
 
 #players {
   list-style: none;
@@ -127,6 +128,22 @@ aside {
   background: var(--panel);
   border-radius: 8px;
 }
+
+#log { position: relative; }
+.log-square { border-radius: 2px; }
+#log li.current { background: var(--line); border-radius: 4px; }
+.log-move {
+  display: block;
+  width: 100%;
+  padding: 1px 5px;
+  font-size: inherit;
+  text-align: left;
+  background: none;
+}
+.log-move:hover { background: rgba(255, 255, 255, .08); }
+
+#history-nav { display: flex; gap: 6px; }
+#history-nav button { flex: 1; }
 
 #promotion p { margin: 0 0 6px; font-weight: 600; }
 #promotion-options { display: flex; gap: 6px; }
