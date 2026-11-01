@@ -8,6 +8,9 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 const OUTER_RADIUS = 380;
 const HOLE_RADIUS = 110;
 const RING_WIDTH = (OUTER_RADIUS - HOLE_RADIUS) / RANKS;
+const PROMOTION_BUTTON_RADIUS = 35;
+const PROMOTION_SPACING = 73;
+const PIECE_NAMES = { Q: 'queen', R: 'rook', B: 'bishop', N: 'knight' };
 const GLYPHS = { K: '♚', Q: '♛', R: '♜', B: '♝', N: '♞', P: '♟' };
 // U+FE0E asks for the text form, otherwise some systems draw the pawn as an emoji.
 const glyph = (type) => `${GLYPHS[type]}︎`;
@@ -238,7 +241,13 @@ function renderBoard() {
     board[sentMove.to] = board[sentMove.from];
     board[sentMove.from] = null;
   }
-  const targets = selected === null || !isMyTurn()
+  // While choosing a promotion, the pawn waits on the square it's moving to.
+  const promoting = isMyTurn() ? pendingPromotion : null;
+  if (promoting) {
+    board[promoting.to] = board[promoting.from];
+    board[promoting.from] = null;
+  }
+  const targets = selected === null || !isMyTurn() || promoting
     ? []
     : legalMoves(game, room.you, selected).map((m) => m.to);
   const kingsInCheck = new Set(game.status === 'active'
@@ -295,7 +304,8 @@ function renderBoard() {
     const radius = outerRadiusOf(rankOf(square)) - RING_WIDTH / 2;
     const halfWidth = (Math.PI * radius) / FILES;
     svg.append(board[square]
-      ? svgEl('circle', { class: 'capture-ring', cx: x, cy: y, r: halfWidth * 0.92 })
+      // Outer squares are wider than they are deep, so the ring has to fit the smaller of the two.
+      ? svgEl('circle', { class: 'capture-ring', cx: x, cy: y, r: Math.min(halfWidth, RING_WIDTH / 2) * 0.92 })
       : svgEl('circle', { class: 'dot', cx: x, cy: y, r: halfWidth * 0.34 }));
   }
 
@@ -305,6 +315,57 @@ function renderBoard() {
     drag.element.textContent = glyph(piece.type);
     svg.append(drag.element);
   }
+
+  if (promoting) drawPromotionMenu(svg, promoting.to, board[promoting.to]);
+}
+
+// The choices run in a line from the promotion square toward the centre of the board,
+// so they're always on the board and never cover the square.
+function drawPromotionMenu(svg, square, pawn) {
+  svg.append(svgEl('rect', { class: 'promotion-scrim', x: -400, y: -400, width: 800, height: 800 }));
+  const [pawnX, pawnY] = cellCentre(square);
+  const shownPawn = svgEl('text', { class: `piece ${pawn.color}`, x: pawnX, y: pawnY, 'font-size': 40 });
+  shownPawn.textContent = glyph(pawn.type);
+  svg.append(shownPawn);
+
+  const angle = fileAngle(fileOf(square));
+  const startRadius = outerRadiusOf(rankOf(square)) - RING_WIDTH / 2;
+  PROMOTIONS.forEach((type, index) => {
+    const [x, y] = polar(startRadius - (index + 1) * PROMOTION_SPACING, angle);
+    const choice = svgEl('g', {
+      class: 'promotion-choice',
+      role: 'button',
+      tabindex: 0,
+      'aria-label': `Promote to ${PIECE_NAMES[type]}`,
+      'data-promotion': type,
+    });
+    choice.append(svgEl('circle', { cx: x, cy: y, r: PROMOTION_BUTTON_RADIUS }));
+    const text = svgEl('text', { class: `piece ${pawn.color}`, x, y, 'font-size': 46 });
+    text.textContent = glyph(type);
+    choice.append(text);
+    choice.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      choosePromotion(type);
+    });
+    svg.append(choice);
+  });
+}
+
+function choosePromotion(type) {
+  const { from, to } = pendingPromotion;
+  pendingPromotion = null;
+  selected = null;
+  // Keeps the pawn on its new square until the server answers.
+  if (!solo && socket?.readyState === WebSocket.OPEN) sentMove = { from, to };
+  send({ type: 'move', from, to, promotion: type });
+  if (!solo) renderGame();
+}
+
+function cancelPromotion() {
+  pendingPromotion = null;
+  selected = null;
+  renderGame();
 }
 
 const isMyTurn = () => viewStep === null && room?.game?.status === 'active' && room.game.turn === room.you;
@@ -316,7 +377,7 @@ function clickSquare(square) {
     const matches = legalMoves(game, room.you, selected).filter((m) => m.to === square);
     if (matches.length > 1) {
       pendingPromotion = { from: selected, to: square };
-      renderPanel();
+      renderGame();
       return;
     }
     if (matches.length === 1) {
@@ -520,23 +581,32 @@ function viewingText() {
   return `Viewing ${place}${waiting ? '. It\'s your move in the live game' : ''}`;
 }
 
-function statusText() {
-  if (viewStep !== null) return viewingText();
+function colorMark(color) {
+  const mark = document.createElement('span');
+  mark.className = `swatch ${color}`;
+  mark.setAttribute('role', 'img');
+  mark.setAttribute('aria-label', COLOR_NAMES[color]);
+  return mark;
+}
+
+// The pieces of the status line: text, plus a coloured circle before a player's name.
+function statusParts() {
+  if (viewStep !== null) return [viewingText()];
   const { game } = room;
   const you = solo ? null : room.you;
   const nameOf = (c) => room.players[c].name;
   if (game.status === 'won') {
-    return game.winner === you ? 'You win!' : `${nameOf(game.winner)} (${COLOR_NAMES[game.winner]}) wins`;
+    return game.winner === you ? ['You win!'] : [colorMark(game.winner), `${nameOf(game.winner)} wins`];
   }
-  if (game.status === 'draw') return 'Draw by stalemate';
-  if (you && !game.alive[you]) return `You are out. ${nameOf(game.turn)} to move`;
-  if (game.turn === you) return isInCheck(game, you) ? 'Your move: you are in check!' : 'Your move';
-  return `${nameOf(game.turn)} (${COLOR_NAMES[game.turn]}) to move`;
+  if (game.status === 'draw') return ['Draw by stalemate'];
+  if (you && !game.alive[you]) return ['You are out. ', colorMark(game.turn), `${nameOf(game.turn)} to move`];
+  if (game.turn === you) return [isInCheck(game, you) ? 'Your move: you are in check!' : 'Your move'];
+  return [colorMark(game.turn), `${nameOf(game.turn)} to move`];
 }
 
 function renderPanel() {
   const game = shownGame();
-  $('status').textContent = statusText();
+  $('status').replaceChildren(...statusParts());
   $('status').className = viewStep !== null ? 'viewing' : isMyTurn() ? 'yours' : '';
 
   const list = $('players');
@@ -563,22 +633,6 @@ function renderPanel() {
   }
 
   renderLog();
-
-  $('promotion').hidden = !pendingPromotion;
-  if (pendingPromotion) {
-    $('promotion-options').replaceChildren(...PROMOTIONS.map((type) => {
-      const button = document.createElement('button');
-      button.textContent = glyph(type);
-      button.setAttribute('aria-label', { Q: 'Queen', R: 'Rook', B: 'Bishop', N: 'Knight' }[type]);
-      button.addEventListener('click', () => {
-        send({ type: 'move', ...pendingPromotion, promotion: type });
-        pendingPromotion = null;
-        selected = null;
-        renderGame();
-      });
-      return button;
-    }));
-  }
 
   const live = room.game;
   $('resign').disabled = !room.you || live.status !== 'active' || !live.alive[room.you];
@@ -623,6 +677,12 @@ $('board').addEventListener('pointerup', endPress);
 $('board').addEventListener('pointercancel', endPress);
 $('board').addEventListener('click', (event) => {
   if (suppressClick) return;
+  if (pendingPromotion) {
+    const choice = event.target.closest('[data-promotion]');
+    if (choice) choosePromotion(choice.dataset.promotion);
+    else cancelPromotion();
+    return;
+  }
   // While the board holds the pointer, the click lands on the board rather than a square.
   const target = event.target.dataset?.square !== undefined
     ? event.target
@@ -644,6 +704,10 @@ $('history-latest').addEventListener('click', () => goToStep(room.game.history.l
 document.addEventListener('keydown', (event) => {
   if ($('game').hidden || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
   if (event.target instanceof HTMLInputElement) return;
+  if (event.key === 'Escape' && pendingPromotion) {
+    cancelPromotion();
+    return;
+  }
   const delta = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
   if (!delta) return;
   event.preventDefault();
