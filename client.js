@@ -25,6 +25,12 @@ let viewStep = null;
 // Past positions replayed so far, kept so stepping through them stays instant.
 let positions = [];
 let toastTimer = null;
+// The press or drag in progress: { from, startX, startY, active, x, y, element }.
+let drag = null;
+let suppressClick = false;
+// A dropped move shown straight away, until the server's answer arrives.
+let sentMove = null;
+const DRAG_THRESHOLD_PX = 6;
 
 const tokenKey = (code) => `tpc-token-${code}`;
 const roomCodeFromUrl = () => new URL(location.href).searchParams.get('room')?.toUpperCase() ?? null;
@@ -96,11 +102,14 @@ function connect() {
     else show('home');
   };
   socket.onclose = () => {
+    sentMove = null;
     setTimeout(connect, 1500);
   };
   socket.onmessage = (event) => {
     const message = JSON.parse(event.data);
     if (message.type === 'error') {
+      sentMove = null;
+      if (room?.game) renderBoard();
       toast(message.message);
       if (!room) {
         history.replaceState(null, '', location.pathname);
@@ -134,6 +143,7 @@ function receiveRoom(message) {
     positions = [];
   }
   room = message;
+  sentMove = null;
   rememberLivePosition();
   const url = new URL(location.href);
   if (url.searchParams.get('room') !== room.code) {
@@ -223,6 +233,11 @@ function renderBoard() {
   const svg = $('board');
   svg.replaceChildren();
   const game = shownGame();
+  const board = game.board.slice();
+  if (sentMove && viewStep === null) {
+    board[sentMove.to] = board[sentMove.from];
+    board[sentMove.from] = null;
+  }
   const targets = selected === null || !isMyTurn()
     ? []
     : legalMoves(game, room.you, selected).map((m) => m.to);
@@ -241,8 +256,8 @@ function renderBoard() {
     if (square === selected) classes.push('selected');
     const mine = isMyTurn() && game.board[square]?.color === room.you;
     if (mine || targets.includes(square)) classes.push('clickable');
+    if (mine) classes.push('draggable');
     const cell = svgEl('path', { class: classes.join(' '), d: cellPath(rank, file), 'data-square': square });
-    cell.addEventListener('click', () => clickSquare(square));
     svg.append(cell);
   }
   svg.append(svgEl('circle', { class: 'hole', r: HOLE_RADIUS }));
@@ -264,8 +279,8 @@ function renderBoard() {
     svg.append(label);
   }
 
-  game.board.forEach((piece, square) => {
-    if (!piece) return;
+  board.forEach((piece, square) => {
+    if (!piece || (drag?.active && square === drag.from)) return;
     const [x, y] = cellCentre(square);
     // Squares shrink toward the hole, and the pieces shrink with them.
     const size = Math.min(40, 0.98 * (2 * Math.PI * (outerRadiusOf(rankOf(square)) - RING_WIDTH / 2)) / FILES);
@@ -279,9 +294,16 @@ function renderBoard() {
     const [x, y] = cellCentre(square);
     const radius = outerRadiusOf(rankOf(square)) - RING_WIDTH / 2;
     const halfWidth = (Math.PI * radius) / FILES;
-    svg.append(game.board[square]
+    svg.append(board[square]
       ? svgEl('circle', { class: 'capture-ring', cx: x, cy: y, r: halfWidth * 0.92 })
       : svgEl('circle', { class: 'dot', cx: x, cy: y, r: halfWidth * 0.34 }));
+  }
+
+  if (drag?.active) {
+    const piece = room.game.board[drag.from];
+    drag.element = svgEl('text', { class: `piece ${piece.color} dragged`, x: drag.x, y: drag.y, 'font-size': 44 });
+    drag.element.textContent = glyph(piece.type);
+    svg.append(drag.element);
   }
 }
 
@@ -307,6 +329,77 @@ function clickSquare(square) {
   pendingPromotion = null;
   selected = game.board[square]?.color === room.you && square !== selected ? square : null;
   renderGame();
+}
+
+// ---- Dragging ----
+
+function pointerToBoard(event) {
+  const point = new DOMPoint(event.clientX, event.clientY).matrixTransform($('board').getScreenCTM().inverse());
+  return [point.x, point.y];
+}
+
+// Stops a finger on your own piece from scrolling the page instead of dragging it.
+function holdTouch(event) {
+  if (drag && event.cancelable) event.preventDefault();
+}
+
+function startPress(event) {
+  suppressClick = false;
+  if (!event.isPrimary || event.button !== 0 || !isMyTurn()) return;
+  const from = Number(event.target.dataset?.square ?? NaN);
+  if (Number.isNaN(from) || room.game.board[from]?.color !== room.you) return;
+  // The board takes over the pointer now, because a redraw removes the square it
+  // landed on, and a touch would end with it.
+  $('board').setPointerCapture(event.pointerId);
+  // Touch events keep going to the square touched first, even once it's redrawn away.
+  event.target.addEventListener('touchmove', holdTouch, { passive: false });
+  drag = { from, startX: event.clientX, startY: event.clientY, active: false };
+}
+
+function movePress(event) {
+  if (!drag) return;
+  if (!drag.active) {
+    if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < DRAG_THRESHOLD_PX) return;
+    drag.active = true;
+    selected = drag.from;
+    pendingPromotion = null;
+    [drag.x, drag.y] = pointerToBoard(event);
+    renderBoard();
+    renderPanel();
+    return;
+  }
+  [drag.x, drag.y] = pointerToBoard(event);
+  drag.element.setAttribute('x', drag.x);
+  drag.element.setAttribute('y', drag.y);
+}
+
+function endPress(event) {
+  const finished = drag;
+  drag = null;
+  if (!finished?.active) return;
+  // The drag ends in a click on the board, which shouldn't also count as one.
+  suppressClick = true;
+  setTimeout(() => { suppressClick = false; }, 50);
+  const to = event.type === 'pointerup'
+    ? Number(document.elementFromPoint(event.clientX, event.clientY)?.dataset?.square ?? NaN)
+    : NaN;
+  dropPiece(finished.from, to);
+}
+
+function dropPiece(from, to) {
+  // Dropping a piece back where it started leaves it selected, like clicking it.
+  selected = to === from && isMyTurn() ? from : null;
+  const matches = isMyTurn() ? legalMoves(room.game, room.you, from).filter((m) => m.to === to) : [];
+  if (matches.length > 1) {
+    selected = from;
+    pendingPromotion = { from, to };
+  } else if (matches.length === 1) {
+    if (!solo && socket?.readyState === WebSocket.OPEN) sentMove = { from, to };
+    send({ type: 'move', from, to });
+    if (solo) return;
+  }
+  renderBoard();
+  renderPanel();
 }
 
 // ---- Move history ----
@@ -339,6 +432,7 @@ function goToStep(step) {
   }
   selected = null;
   pendingPromotion = null;
+  drag = null;
   renderGame();
 }
 
@@ -522,6 +616,20 @@ $('resign').addEventListener('click', () => {
   send({ type: 'resign' });
 });
 $('undo').addEventListener('click', undoSolo);
+$('board').addEventListener('pointerdown', startPress);
+$('board').addEventListener('touchmove', holdTouch, { passive: false });
+$('board').addEventListener('pointermove', movePress);
+$('board').addEventListener('pointerup', endPress);
+$('board').addEventListener('pointercancel', endPress);
+$('board').addEventListener('click', (event) => {
+  if (suppressClick) return;
+  // While the board holds the pointer, the click lands on the board rather than a square.
+  const target = event.target.dataset?.square !== undefined
+    ? event.target
+    : document.elementFromPoint(event.clientX, event.clientY);
+  const square = Number(target?.dataset?.square ?? NaN);
+  if (!Number.isNaN(square)) clickSquare(square);
+});
 $('chat-form').addEventListener('submit', (event) => {
   event.preventDefault();
   const text = $('chat-input').value.trim();
