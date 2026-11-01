@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createGame, legalMoves, applyMove, resign, isInCheck, isLightSquare, sq, rankOf, COLORS, SQUARES,
+  createGame, legalMoves, applyMove, resign, replayAction, isInCheck, isLightSquare, sq, rankOf, COLORS, SQUARES,
 } from '../shared/engine.js';
 
 // Builds a position from { square: 'wK' }. Pieces default to having moved so
@@ -679,6 +679,54 @@ test('thin line: goes when its moat goes', () => {
   const state = position({ ...KINGS, [sq(1, 0)]: 'wP', [sq(2, 23)]: 'bN' });
   state.moats = [8, 16];
   assert.ok(targets(state, sq(1, 0)).includes(sq(2, 23)));
+});
+
+test('history: replaying it rebuilds every position exactly', () => {
+  let seed = 777;
+  const random = (n) => {
+    seed = (seed * 1664525 + 1013904223) % 4294967296;
+    return Math.floor((seed / 4294967296) * n);
+  };
+  for (let game = 0; game < 5; game++) {
+    const played = [createGame()];
+    while (played.length < 200 && played.at(-1).status === 'active') {
+      const state = played.at(-1);
+      const moves = legalMoves(state);
+      played.push(random(150) === 0
+        ? resign(state, state.turn)
+        : applyMove(state, moves[random(moves.length)]));
+    }
+    const last = played.at(-1);
+    assert.equal(last.history.length, played.length - 1);
+    assert.equal(last.history.at(-1).logEnd, last.log.length, 'every log line belongs to an action');
+    let replayed = createGame();
+    last.history.forEach((action, i) => {
+      replayed = replayAction(replayed, action);
+      assert.deepEqual(replayed, played[i + 1]);
+    });
+  }
+});
+
+test('history: a move and what it caused share one step', () => {
+  const state = applyMove(mateNet(), { from: sq(5, 20), to: sq(5, 21) });
+  assert.equal(state.history.length, state.history.at(-1).logEnd === 2 ? 1 : -1);
+  assert.deepEqual(state.log.slice(-1), ['White is checkmated']);
+});
+
+test('history: promotions and resignations are recorded', () => {
+  let state = position({ ...KINGS, [sq(1, 15)]: 'wP^' });
+  state = applyMove(state, { from: sq(1, 15), to: sq(0, 15), promotion: 'N' });
+  assert.equal(state.history[0].promotion, 'N');
+  state = resign(state, 'g');
+  assert.equal(state.history[1].resign, 'g');
+});
+
+test('history: games saved before it existed still play', () => {
+  const state = createGame();
+  delete state.history;
+  const after = resign(applyMove(state, { from: sq(1, 0), to: sq(2, 0) }), 'g');
+  assert.equal(after.history, undefined);
+  assert.equal(after.alive.g, false);
 });
 
 test('random playouts never break the invariants', () => {
