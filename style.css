@@ -1,11 +1,11 @@
 :root {
   --bg: #2b211a;
-  --panel: #3a2d23;
-  --panel-light: #4d3e32;
+  --panel: #4d3e32;
   --text: #f3e9dc;
   --muted: #bda98f;
   --accent: #d9a441;
   --line: #5a4635;
+  --raised: #7a6552;
 }
 
 * { box-sizing: border-box; }
@@ -58,6 +58,7 @@ button {
 }
 button:hover:not(:disabled) { filter: brightness(1.15); }
 button:disabled { opacity: .55; cursor: default; }
+.card button:not(.primary) { background: var(--raised); }
 button.primary { background: var(--accent); color: #2b211a; font-weight: 600; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
@@ -109,7 +110,7 @@ aside {
   list-style: none;
   margin: 0;
   padding: 4px 13px;
-  background: var(--panel-light);
+  background: var(--panel);
   border-radius: 8px;
 }
 #players li { padding: 5px 0; overflow-wrap: anywhere; }
@@ -126,7 +127,7 @@ aside {
   list-style: none;
   overflow-y: auto;
   font-size: 14px;
-  background: var(--panel-light);
+  background: var(--panel);
   border-radius: 8px;
 }
 
@@ -141,7 +142,7 @@ aside {
   white-space: nowrap;
 }
 .log-square { margin-right: 4px; border-radius: 2px; }
-#log li.current { background: #7a6552; border-radius: 4px; }
+#log li.current { background: var(--raised); border-radius: 4px; }
 .log-move {
   display: block;
   width: 100%;
