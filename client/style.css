@@ -197,6 +197,9 @@ aside {
 .cell.selected { fill: #5fa35a; }
 .cell.in-check { fill: #d6443a; }
 .cell.clickable { cursor: pointer; }
+.cell.draggable { cursor: grab; }
+#board { user-select: none; -webkit-user-select: none; }
+.piece.dragged { cursor: grabbing; }
 .rim { fill: none; stroke: #4a2d17; stroke-width: 12; }
 .hole { fill: var(--bg); stroke: #4a2d17; stroke-width: 6; }
 .moat { stroke: #22c04a; stroke-width: 9; stroke-linecap: round; pointer-events: none; }
