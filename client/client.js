@@ -1,6 +1,6 @@
 import {
   RANKS, FILES, SQUARES, COLORS, COLOR_NAMES, PROMOTIONS,
-  rankOf, fileOf, isLightSquare, legalMoves, isInCheck, createGame, applyMove, resign,
+  rankOf, fileOf, isLightSquare, legalMoves, isInCheck, createGame, applyMove, resign, replayAction,
 } from './engine.js';
 
 const $ = (id) => document.getElementById(id);
@@ -20,6 +20,10 @@ let solo = false;
 let room = null;
 let selected = null;
 let pendingPromotion = null;
+// The past position on show, as a number of actions from the start. Null is the live game.
+let viewStep = null;
+// Past positions replayed so far, kept so stepping through them stays instant.
+let positions = [];
 let toastTimer = null;
 
 const tokenKey = (code) => `tpc-token-${code}`;
@@ -29,6 +33,8 @@ function startSolo() {
   solo = true;
   const players = Object.fromEntries(COLORS.map((color, i) => [color, { name: `Player ${i + 1}`, online: true }]));
   room = { code: null, you: 'w', players, game: createGame() };
+  viewStep = null;
+  positions = [];
   renderGame();
 }
 
@@ -42,6 +48,8 @@ function playSolo(message) {
   }
   selected = null;
   pendingPromotion = null;
+  viewStep = null;
+  rememberLivePosition();
   renderGame();
 }
 
@@ -103,7 +111,12 @@ function receiveRoom(message) {
     selected = null;
     pendingPromotion = null;
   }
+  if (room?.code !== message.code) {
+    viewStep = null;
+    positions = [];
+  }
   room = message;
+  rememberLivePosition();
   const url = new URL(location.href);
   if (url.searchParams.get('room') !== room.code) {
     url.search = `?room=${room.code}`;
@@ -191,7 +204,7 @@ function cellCentre(square) {
 function renderBoard() {
   const svg = $('board');
   svg.replaceChildren();
-  const { game } = room;
+  const game = shownGame();
   const targets = selected === null || !isMyTurn()
     ? []
     : legalMoves(game, room.you, selected).map((m) => m.to);
@@ -254,7 +267,7 @@ function renderBoard() {
   }
 }
 
-const isMyTurn = () => room?.game?.status === 'active' && room.game.turn === room.you;
+const isMyTurn = () => viewStep === null && room?.game?.status === 'active' && room.game.turn === room.you;
 
 function clickSquare(square) {
   if (!isMyTurn()) return;
@@ -278,9 +291,95 @@ function clickSquare(square) {
   renderGame();
 }
 
+// ---- Move history ----
+
+// Positions seen live never need replaying, so only joining mid-game has to.
+function rememberLivePosition() {
+  if (positions.length > 0 && positions.length === room.game?.history?.length) positions.push(room.game);
+}
+
+function positionAt(step) {
+  if (positions.length === 0) positions.push(createGame());
+  while (positions.length <= step) {
+    positions.push(replayAction(positions.at(-1), room.game.history[positions.length - 1]));
+  }
+  return positions[step];
+}
+
+const shownGame = () => (viewStep === null ? room.game : positionAt(viewStep));
+const currentStep = () => viewStep ?? room.game.history?.length ?? 0;
+
+function goToStep(step) {
+  const moves = room.game.history;
+  if (!moves || step < 0 || step > moves.length) return;
+  try {
+    if (step < moves.length) positionAt(step);
+    viewStep = step < moves.length ? step : null;
+  } catch {
+    toast('That position could not be rebuilt');
+    return;
+  }
+  selected = null;
+  pendingPromotion = null;
+  renderGame();
+}
+
+// Moves are logged as "White: d2-d4" and shown with a coloured square for the name.
+function fillLogLine(element, line) {
+  const color = COLORS.find((c) => line.startsWith(`${COLOR_NAMES[c]}: `));
+  if (!color) {
+    element.textContent = line;
+    return;
+  }
+  const square = document.createElement('span');
+  square.className = `swatch log-square ${color}`;
+  square.setAttribute('role', 'img');
+  square.setAttribute('aria-label', COLOR_NAMES[color]);
+  element.append(square, line.slice(COLOR_NAMES[color].length + 2));
+}
+
+function renderLog() {
+  const game = room.game;
+  const moves = game.history ?? [];
+  const log = $('log');
+  let index = 0;
+  log.replaceChildren(...game.log.map((line, lineNumber) => {
+    while (index < moves.length && moves[index].logEnd <= lineNumber) index++;
+    const entry = document.createElement('li');
+    if (index === moves.length) {
+      fillLogLine(entry, line);
+      return entry;
+    }
+    const step = index + 1;
+    const button = document.createElement('button');
+    button.className = 'log-move';
+    fillLogLine(button, line);
+    button.addEventListener('click', () => goToStep(step));
+    if (step === currentStep()) entry.className = 'current';
+    entry.append(button);
+    return entry;
+  }));
+  const current = log.querySelector('.current');
+  log.scrollTop = viewStep === null || !current
+    ? log.scrollHeight
+    : current.offsetTop - log.clientHeight / 2;
+
+  $('history-nav').hidden = !game.history;
+  $('history-back').disabled = currentStep() === 0;
+  $('history-forward').disabled = viewStep === null;
+  $('history-latest').disabled = viewStep === null;
+}
+
 // ---- Side panel ----
 
+function viewingText() {
+  const place = viewStep === 0 ? 'the starting position' : `move ${viewStep} of ${room.game.history.length}`;
+  const waiting = room.game.status === 'active' && room.game.turn === room.you && !solo;
+  return `Viewing ${place}${waiting ? '. It\'s your move in the live game' : ''}`;
+}
+
 function statusText() {
+  if (viewStep !== null) return viewingText();
   const { game } = room;
   const you = solo ? null : room.you;
   const nameOf = (c) => room.players[c].name;
@@ -294,9 +393,9 @@ function statusText() {
 }
 
 function renderPanel() {
-  const { game } = room;
+  const game = shownGame();
   $('status').textContent = statusText();
-  $('status').className = isMyTurn() ? 'yours' : '';
+  $('status').className = viewStep !== null ? 'viewing' : isMyTurn() ? 'yours' : '';
 
   const list = $('players');
   list.replaceChildren();
@@ -321,13 +420,7 @@ function renderPanel() {
     list.append(item);
   }
 
-  const log = $('log');
-  log.replaceChildren(...game.log.map((line) => {
-    const entry = document.createElement('li');
-    entry.textContent = line;
-    return entry;
-  }));
-  log.scrollTop = log.scrollHeight;
+  renderLog();
 
   $('promotion').hidden = !pendingPromotion;
   if (pendingPromotion) {
@@ -345,7 +438,8 @@ function renderPanel() {
     }));
   }
 
-  $('resign').hidden = !room.you || game.status !== 'active' || !game.alive[room.you];
+  const live = room.game;
+  $('resign').hidden = !room.you || live.status !== 'active' || !live.alive[room.you];
 }
 
 function renderGame() {
@@ -373,7 +467,20 @@ $('copy-link').addEventListener('click', async () => {
   }
 });
 $('resign').addEventListener('click', () => {
-  if (confirm('Resign? Your pieces stay on the board as corpses.')) send({ type: 'resign' });
+  if (!confirm('Resign? Your pieces stay on the board as corpses.')) return;
+  viewStep = null;
+  send({ type: 'resign' });
+});
+$('history-back').addEventListener('click', () => goToStep(currentStep() - 1));
+$('history-forward').addEventListener('click', () => goToStep(currentStep() + 1));
+$('history-latest').addEventListener('click', () => goToStep(room.game.history.length));
+document.addEventListener('keydown', (event) => {
+  if ($('game').hidden || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+  if (event.target instanceof HTMLInputElement) return;
+  const delta = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
+  if (!delta) return;
+  event.preventDefault();
+  goToStep(currentStep() + delta);
 });
 $('name').value = localStorage.getItem('tpc-name') ?? '';
 

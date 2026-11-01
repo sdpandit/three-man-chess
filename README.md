@@ -20,6 +20,9 @@ To try it alone, open http://localhost:3000/?solo to play all three colours from
 
 A copy of the analysis board, without online play, is at https://sdpandit.github.io/three-man-chess/.
 
+During a game, click any move in the history or use the left and right arrow keys to
+look at past positions. Moves can only be made from the latest position.
+
 ## Put it online
 
 Friends in other cities need a public address. Either of these works:

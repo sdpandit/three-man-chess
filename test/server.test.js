@@ -98,6 +98,7 @@ test('three clients play a game; the server enforces the rules and survives a re
     w.send({ type: 'move', from: sq(1, 0), to: sq(2, 0) });
     const moved = await g.until((m) => m.type === 'room' && m.game?.turn === 'g');
     assert.equal(moved.game.board[sq(2, 0)].color, 'w');
+    assert.deepEqual(moved.game.history, [{ from: sq(1, 0), to: sq(2, 0), logEnd: 1 }]);
 
     // Garbage must only produce an error.
     w.ws.send('not json');
