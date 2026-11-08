@@ -344,14 +344,12 @@ function advanceTurn(state) {
     if (!state.alive[color]) continue;
     state.turn = color;
     if (hasLegalMove(state, color)) return;
-    // Stalemate only counts as a draw once it's down to two players.
-    if (isInCheck(state, color) || COLORS.every((c) => state.alive[c])) {
-      state.log.push(`${COLOR_NAMES[color]} is checkmated`);
-      kill(state, color);
-    } else {
-      state.log.push(`${COLOR_NAMES[color]} is stalemated`);
-      state.status = 'draw';
-    }
+    const inCheck = isInCheck(state, color);
+    state.log.push(`${COLOR_NAMES[color]} is ${inCheck ? 'checkmated' : 'stalemated'}`);
+    // Stalemate knocks a player out like checkmate, until it's down to two players,
+    // when it's a draw.
+    if (inCheck || COLORS.every((c) => state.alive[c])) kill(state, color);
+    else state.status = 'draw';
   }
 }
 

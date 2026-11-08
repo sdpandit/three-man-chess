@@ -518,7 +518,8 @@ test('stalemate with three players left counts as checkmate', () => {
   assert.equal(state.alive.w, false);
   assert.equal(state.turn, 'g');
   assert.equal(state.board[sq(0, 0)].color, 'w', 'corpse stays on the board');
-  assert.ok(state.log.includes('White is checkmated'));
+  assert.ok(state.log.includes('White is stalemated'), 'logged as stalemate, though it counts as mate');
+  assert.ok(!state.log.includes('White is checkmated'));
   assert.ok(!state.moats.includes(0), 'its moats go');
 });
 
@@ -527,6 +528,7 @@ test('stalemate with two players left is a draw', () => {
   assert.equal(state.status, 'draw');
   assert.equal(state.winner, null);
   assert.equal(state.alive.w, true);
+  assert.ok(state.log.includes('White is stalemated'));
 });
 
 test('moat: the bishop and knight examples from the rules', () => {
