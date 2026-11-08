@@ -118,6 +118,8 @@ aside {
 #players .tag { color: var(--muted); font-size: 13px; }
 #players .check { color: #ff9c8f; font-size: 13px; font-weight: 600; }
 #players .dead { text-decoration: line-through; color: var(--muted); }
+#players .rename { margin-left: 6px; padding: 0 6px; font-size: 13px; line-height: 1.6; }
+#players .rename-input { width: 12em; padding: 2px 6px; }
 
 #log {
   flex: 0 1 180px;

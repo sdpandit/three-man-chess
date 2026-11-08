@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, existsSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -117,6 +117,32 @@ test('three clients play a game; the server enforces the rules and survives a re
     b.send({ type: 'chat', text: 'after blank' });
     assert.equal((await w.until((m) => m.type === 'chat' && m.message.color === 'b')).message.text, 'after blank');
 
+    // The admin endpoint posts under any name, and only with the token.
+    const adminChat = (body, token = readFileSync(path.join(dir, 'admin-token'), 'utf8')) =>
+      fetch(`http://localhost:${PORT}/admin/chat`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+      });
+    assert.equal((await adminChat({ room: code, name: 'Jack', text: 'hi' }, 'wrong')).status, 403);
+    assert.equal((await adminChat({ room: 'NOPE00', name: 'Jack', text: 'hi' })).status, 404);
+    assert.equal((await adminChat({ room: code.toLowerCase(), name: 'Jack', text: 'yo', color: 'b' })).status, 200);
+    const jack = await watcher.until((m) => m.type === 'chat' && m.message.name === 'Jack');
+    assert.deepEqual(jack.message, { color: 'b', name: 'Jack', text: 'yo' }, 'nothing marks it as made up');
+
+    // Players can rename themselves mid-game, and their past chat follows, but not
+    // messages posted under a made-up name. Spectators can't, and empty names fall back.
+    b.send({ type: 'rename', name: '  Cyrus  ' });
+    assert.equal((await watcher.until((m) => m.type === 'room' && m.players.b.name !== 'Cy')).players.b.name, 'Cyrus');
+    const renamedChat = await watcher.until((m) => m.type === 'chatHistory');
+    assert.deepEqual(renamedChat.messages.filter((m) => m.color === 'b').map((m) => m.name), ['Cyrus', 'Jack']);
+    watcher.send({ type: 'rename', name: 'Sneaky' });
+    assert.match((await watcher.until((m) => m.type === 'error')).message, /Take a seat/);
+    g.send({ type: 'rename', name: '   ' });
+    assert.equal((await w.until((m) => m.type === 'room' && m.players.g.name !== '<b>Bo</b>')).players.g.name, 'Player');
+    g.send({ type: 'rename', name: '<b>Bo</b>' });
+    await w.until((m) => m.type === 'room' && m.players.g.name === '<b>Bo</b>');
+
     // Garbage must only produce an error.
     w.ws.send('not json');
     await w.until((m) => m.type === 'error');
@@ -133,10 +159,11 @@ test('three clients play a game; the server enforces the rules and survives a re
     const back = await client();
     back.send({ type: 'join', code, token: whiteToken });
     const history = await back.until((m) => m.type === 'chatHistory');
-    assert.deepEqual(history.messages.map((m) => m.color), ['w', 'g', 'b'], 'chat survives a restart');
+    assert.deepEqual(history.messages.map((m) => m.name), ['Ann', '<b>Bo</b>', 'Cyrus', 'Jack'], 'chat survives a restart');
     assert.equal(JSON.stringify(history).includes(whiteToken), false);
     const restored = await back.until((m) => m.type === 'room');
     assert.equal(restored.you, 'w');
+    assert.equal(restored.players.b.name, 'Cyrus', 'renames survive a restart');
     assert.equal(restored.game.turn, 'g');
     assert.equal(restored.game.board[sq(2, 0)].color, 'w');
 

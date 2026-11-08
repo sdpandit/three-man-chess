@@ -29,9 +29,11 @@
       <input id="share-link" readonly>
       <button id="copy-link">Copy</button>
     </div>
-    <label for="name">Your name</label>
+    <label for="name" id="name-label">Your name</label>
     <input id="name" maxlength="24" autocomplete="off">
     <div id="seats"></div>
+    <p id="watching-note" hidden>You're watching. The board appears here once all three seats are taken.</p>
+    <button id="watch">Just watch</button>
   </main>
 
   <main id="game" hidden>

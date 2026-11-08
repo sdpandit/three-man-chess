@@ -1,9 +1,9 @@
 // HTTP + WebSocket server. It holds the authoritative game state for each room:
 // clients only ask for moves, and every move is checked with the shared engine.
 import { createServer } from 'node:http';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -17,6 +17,7 @@ const MAX_ROOMS = 1000;
 const MAX_CHAT_MESSAGES = 200;
 const MAX_CHAT_LENGTH = 300;
 const CHAT_COOLDOWN_MS = 250;
+const ADMIN_TOKEN_FILE = path.join(path.dirname(DATA_FILE), 'admin-token');
 
 // Only these files are ever served, so there is no path handling to get wrong.
 const STATIC_FILES = {
@@ -103,6 +104,12 @@ function broadcast(room) {
   }
 }
 
+// Names are shown as text, never as HTML, so only their length needs limiting.
+// What players see of a chat message: nothing marks one posted under a made-up name.
+const publicChat = ({ color, name, text }) => ({ color, name, text });
+
+const cleanName = (name) => String(name ?? '').trim().slice(0, 24) || 'Player';
+
 function attach(socket, room, color) {
   if (socket.room && socket.room !== room) detach(socket);
   socket.room = room;
@@ -134,7 +141,7 @@ const handlers = {
     if (!room) throw new Error('That game does not exist');
     const color = COLORS.find((c) => token && room.seats[c]?.token === token) ?? null;
     attach(socket, room, color);
-    send(socket, { type: 'chatHistory', messages: room.chat });
+    send(socket, { type: 'chatHistory', messages: room.chat.map(publicChat) });
     broadcast(room);
   },
 
@@ -145,14 +152,34 @@ const handlers = {
     if (!COLORS.includes(color)) throw new Error('Unknown colour');
     if (room.seats[color]) throw new Error('That seat is taken');
     if (sockets.get(room.code).get(socket)) throw new Error('You already have a seat');
-    const cleanName = String(name ?? '').trim().slice(0, 24) || 'Player';
     const token = randomBytes(24).toString('hex');
-    room.seats[color] = { name: cleanName, token };
+    room.seats[color] = { name: cleanName(name), token };
     sockets.get(room.code).set(socket, color);
     send(socket, { type: 'seat', code: room.code, token });
     if (COLORS.every((c) => room.seats[c])) room.game = createGame();
     touch(room);
     broadcast(room);
+  },
+
+  // Players can change their name at any time, even mid-game. Their past chat messages
+  // take the new name too, but messages posted under a made-up name keep theirs.
+  rename(socket, { name }) {
+    const room = socket.room;
+    const color = room && sockets.get(room.code).get(socket);
+    if (!color) throw new Error('Take a seat first');
+    const newName = cleanName(name);
+    room.seats[color].name = newName;
+    let chatChanged = false;
+    for (const message of room.chat) {
+      if (message.color !== color || message.custom || message.name === newName) continue;
+      message.name = newName;
+      chatChanged = true;
+    }
+    touch(room);
+    broadcast(room);
+    if (chatChanged) {
+      for (const client of sockets.get(room.code).keys()) send(client, { type: 'chatHistory', messages: room.chat.map(publicChat) });
+    }
   },
 
   move(socket, { from, to, promotion }) {
@@ -192,10 +219,62 @@ const handlers = {
   },
 };
 
+// The admin token sits next to the saved games and stays the same across restarts.
+// Requests through a tunnel arrive from localhost too, so the token is the only guard.
+function loadAdminToken() {
+  try {
+    return readFileSync(ADMIN_TOKEN_FILE, 'utf8').trim();
+  } catch {
+    const token = randomBytes(24).toString('hex');
+    mkdirSync(path.dirname(ADMIN_TOKEN_FILE), { recursive: true });
+    writeFileSync(ADMIN_TOKEN_FILE, token, { mode: 0o600 });
+    return token;
+  }
+}
+const adminToken = Buffer.from(loadAdminToken());
+
+function isAdmin(req) {
+  const given = Buffer.from(String(req.headers.authorization ?? '').replace(/^Bearer /, ''));
+  return given.length === adminToken.length && timingSafeEqual(given, adminToken);
+}
+
+// POST /admin/chat with { room, name, text, color? } posts a chat message under any name.
+// `npm run say` wraps it.
+async function adminChat(req, res) {
+  const reply = (status, body) => res.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify(body));
+  if (!isAdmin(req)) return reply(403, { error: 'Bad admin token' });
+  let raw = '';
+  for await (const chunk of req) {
+    raw += chunk;
+    if (raw.length > 4096) return reply(413, { error: 'Too long' });
+  }
+  let body;
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    return reply(400, { error: 'Body must be JSON' });
+  }
+  const room = rooms.get(String(body.room ?? '').toUpperCase());
+  if (!room) return reply(404, { error: 'That game does not exist' });
+  const text = String(body.text ?? '').trim().slice(0, MAX_CHAT_LENGTH);
+  if (!text) return reply(400, { error: 'Empty message' });
+  const color = COLORS.includes(body.color) ? body.color : null;
+  const message = { color, name: cleanName(body.name), text, custom: true };
+  room.chat.push(message);
+  room.chat.splice(0, room.chat.length - MAX_CHAT_MESSAGES);
+  touch(room);
+  for (const client of sockets.get(room.code)?.keys() ?? []) send(client, { type: 'chat', message: publicChat(message) });
+  return reply(200, { sent: message, watching: sockets.get(room.code)?.size ?? 0 });
+}
+
 async function serveStatic(req, res) {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname === '/health') {
     res.writeHead(200).end('ok');
+    return;
+  }
+  if (url.pathname === '/admin/chat' && req.method === 'POST') {
+    await adminChat(req, res);
     return;
   }
   const entry = STATIC_FILES[url.pathname];

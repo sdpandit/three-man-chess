@@ -28,6 +28,13 @@ look at past positions. Moves can only be made from the latest position. Undo on
 on the analysis board, and is greyed out in online games.
 
 Online games also have a chat. Players can write in it, and anyone with the game link can read it.
+Players can rename themselves at any time with the ✎ next to their name, and their past
+messages take the new name.
+
+Whoever runs the server can post in a game's chat under any name:
+`npm run say -- <room> <name> "<message>" [w|g|b]`. The colour is optional. This uses a
+secret token the server creates in `data/admin-token`, so people with the game link can't
+do the same.
 
 ## Put it online
 

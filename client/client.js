@@ -33,6 +33,11 @@ let drag = null;
 let suppressClick = false;
 // A dropped move shown straight away, until the server's answer arrives.
 let sentMove = null;
+// The game this page chose to watch rather than play. Only the lobby needs it:
+// anyone without a seat already watches once the game starts.
+let watchingCode = null;
+// True while you're typing a new name in the player list, so updates don't wipe it out.
+let editingName = false;
 const DRAG_THRESHOLD_PX = 6;
 
 const tokenKey = (code) => `tpc-token-${code}`;
@@ -161,6 +166,7 @@ function receiveRoom(message) {
 
 function renderLobby() {
   show('lobby');
+  const watching = !room.you && watchingCode === room.code;
   $('share-link').value = `${location.origin}${location.pathname}?room=${room.code}`;
   const seats = $('seats');
   seats.replaceChildren();
@@ -169,10 +175,10 @@ function renderLobby() {
     row.className = 'seat';
     row.append(colorLabel(color));
     const player = room.players[color];
-    const right = document.createElement(player || room.you ? 'span' : 'button');
+    const right = document.createElement(player || room.you || watching ? 'span' : 'button');
     if (player) {
       right.textContent = color === room.you ? `${player.name} (you)` : player.name;
-    } else if (room.you) {
+    } else if (room.you || watching) {
       right.textContent = 'Open';
     } else {
       right.textContent = 'Sit here';
@@ -184,7 +190,14 @@ function renderLobby() {
     row.append(right);
     seats.append(row);
   }
-  $('name').disabled = Boolean(room.you);
+  // Once seated, the name box renames you instead of naming the seat you pick.
+  if (room.you && document.activeElement !== $('name')) $('name').value = room.players[room.you].name;
+  $('name').hidden = watching;
+  $('name-label').hidden = watching;
+  $('watching-note').hidden = !watching;
+  // Once seated you're playing, so there's nothing to switch.
+  $('watch').hidden = Boolean(room.you);
+  $('watch').textContent = watching ? 'Take a seat instead' : 'Just watch';
 }
 
 function colorLabel(color) {
@@ -564,7 +577,8 @@ function addChatMessage({ color, name, text }) {
   const atBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 4;
   const entry = document.createElement('li');
   const swatch = document.createElement('span');
-  swatch.className = `swatch ${color}`;
+  // Messages posted under a made-up name may have no seat colour.
+  swatch.className = color ? `swatch ${color}` : '';
   const author = document.createElement('span');
   author.className = 'chat-name';
   author.textContent = `${name}: `;
@@ -609,6 +623,14 @@ function renderPanel() {
   $('status').replaceChildren(...statusParts());
   $('status').className = viewStep !== null ? 'viewing' : isMyTurn() ? 'yours' : '';
 
+  if (!editingName) renderPlayers(game);
+  renderLog();
+
+  const live = room.game;
+  $('resign').disabled = !room.you || live.status !== 'active' || !live.alive[room.you];
+}
+
+function renderPlayers(game) {
   const list = $('players');
   list.replaceChildren();
   for (const color of COLORS) {
@@ -621,6 +643,15 @@ function renderPanel() {
     name.textContent = !solo && color === room.you ? `${player.name} (you)` : player.name;
     if (!game.alive[color]) name.className = 'dead';
     item.append(swatch, name);
+    if (!solo && color === room.you) {
+      const edit = document.createElement('button');
+      edit.className = 'rename';
+      edit.textContent = '✎';
+      edit.title = 'Change your name';
+      edit.setAttribute('aria-label', 'Change your name');
+      edit.addEventListener('click', () => startRename(item, name, player.name));
+      item.append(edit);
+    }
     const addTag = (text, className) => {
       const tag = document.createElement('span');
       tag.className = className;
@@ -631,11 +662,40 @@ function renderPanel() {
     if (!player.online) addTag('offline', 'tag');
     list.append(item);
   }
+}
 
-  renderLog();
+// Swaps your name in the player list for a text box. Enter or clicking away saves it,
+// Escape cancels.
+function startRename(item, nameElement, current) {
+  editingName = true;
+  const input = document.createElement('input');
+  input.className = 'rename-input';
+  input.maxLength = 24;
+  input.value = current;
+  input.setAttribute('aria-label', 'Your name');
+  const finish = (save) => {
+    if (!editingName) return;
+    editingName = false;
+    const name = input.value.trim();
+    if (save && name && name !== current) {
+      rename(name);
+      $('name').value = name;
+    }
+    renderPanel();
+  };
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') finish(true);
+    if (event.key === 'Escape') finish(false);
+  });
+  input.addEventListener('blur', () => finish(true));
+  item.replaceChildren(item.firstChild, input);
+  input.focus();
+  input.select();
+}
 
-  const live = room.game;
-  $('resign').disabled = !room.you || live.status !== 'active' || !live.alive[room.you];
+function rename(name) {
+  localStorage.setItem('tpc-name', name);
+  send({ type: 'rename', name });
 }
 
 function renderGame() {
@@ -670,6 +730,13 @@ $('resign').addEventListener('click', () => {
   send({ type: 'resign' });
 });
 $('undo').addEventListener('click', undoSolo);
+$('name').addEventListener('change', () => {
+  if (room?.you && $('name').value.trim()) rename($('name').value);
+});
+$('watch').addEventListener('click', () => {
+  watchingCode = watchingCode === room.code ? null : room.code;
+  renderLobby();
+});
 $('board').addEventListener('pointerdown', startPress);
 $('board').addEventListener('touchmove', holdTouch, { passive: false });
 $('board').addEventListener('pointermove', movePress);
