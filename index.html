@@ -24,20 +24,48 @@
 
   <main id="lobby" class="card" hidden>
     <h1>Waiting for players</h1>
-    <p>Send this link to your friends. The game starts once all three seats are taken.</p>
+    <p>Send this link to your friends. The creator can start the game once all three seats are taken.</p>
     <div class="row">
       <input id="share-link" readonly>
       <button id="copy-link">Copy</button>
     </div>
-    <label for="name">Your name</label>
+    <label for="name" id="name-label">Your name</label>
     <input id="name" maxlength="24" autocomplete="off">
+    <div id="clock-settings" hidden>
+      <label class="check"><input type="checkbox" id="use-clock"> Play with a clock</label>
+      <div id="clock-options" class="row" hidden>
+        <div>
+          <label for="clock-minutes">Minutes each</label>
+          <input id="clock-minutes" type="number" min="1" max="180" step="any" value="10">
+        </div>
+        <div>
+          <label for="clock-increment">Increment (seconds)</label>
+          <input id="clock-increment" type="number" min="0" max="60" step="1" value="5">
+        </div>
+      </div>
+    </div>
+    <p id="time-control">
+      <span id="time-control-text"></span>
+      <button id="time-control-help" class="help" aria-expanded="false" aria-controls="time-control-explained"
+        aria-label="What does this mean?" title="What does this mean?">?</button>
+    </p>
+    <p id="time-control-explained" hidden></p>
     <div id="seats"></div>
+    <p id="watching-note" hidden>You're watching. The board appears here once the game starts.</p>
+    <p id="start-note" hidden>All three seats are taken. Waiting for the creator to start the game.</p>
+    <button id="start" class="primary" hidden disabled>Start game</button>
+    <button id="watch">Just watch</button>
   </main>
 
   <main id="game" hidden>
     <div id="board-wrap"><svg id="board" viewBox="-400 -400 800 800" role="img" aria-label="Game board"></svg></div>
     <aside>
       <p id="status" role="status"></p>
+      <button id="leave-game" hidden>Return to lobby</button>
+      <div id="takeback" role="alert" hidden>
+        <span id="takeback-text"></span>
+        <div id="takeback-votes"></div>
+      </div>
       <ul id="players"></ul>
       <ol id="log"></ol>
       <div id="history-nav">
@@ -51,6 +79,10 @@
         <button id="resign" aria-label="Resign" title="Resign">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.4 6L14 4H5v17h2v-7h5.6l.4 2h7V6z"/></svg>
         </button>
+        <button id="chat-toggle" aria-label="Chat" title="Chat" aria-expanded="false" aria-controls="chat">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 4v-4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/></svg>
+          <span id="chat-dot" hidden></span>
+        </button>
       </div>
       <section id="chat" aria-label="Chat" hidden>
         <ul id="chat-messages"></ul>
@@ -61,6 +93,15 @@
       </section>
     </aside>
   </main>
+
+  <dialog id="result" aria-labelledby="result-title">
+    <h2 id="result-title"></h2>
+    <p id="result-detail"></p>
+    <div class="row">
+      <button id="review" class="primary">Review game</button>
+      <button id="to-lobby">Return to lobby</button>
+    </div>
+  </dialog>
 
   <p id="toast" role="alert" hidden></p>
   <script type="module" src="client.js"></script>

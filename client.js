@@ -33,13 +33,29 @@ let drag = null;
 let suppressClick = false;
 // A dropped move shown straight away, until the server's answer arrives.
 let sentMove = null;
+// The game this page chose to watch rather than play. Only the lobby needs it:
+// anyone without a seat already watches once the game starts.
+let watchingCode = null;
+// True while you're typing a new name in the player list, so updates don't wipe it out.
+let editingName = false;
+// Phones show chat only when opened from the button row, so new messages light a dot there.
+const phoneLayout = matchMedia('(max-width: 800px)');
+// GitHub Pages has no game server, so that copy of the site is only the analysis board,
+// as is any page opened with ?solo.
+const boardOnly = location.hostname.endsWith('.github.io') || new URL(location.href).searchParams.has('solo');
+// Which game the end-of-game pop-up has been shown for, so it only appears once.
+let resultShownFor = null;
+// When the latest clock times arrived, by performance.now(), to count down from.
+let clockReceivedAt = 0;
 const DRAG_THRESHOLD_PX = 6;
 
 const tokenKey = (code) => `tpc-token-${code}`;
+const hostTokenKey = (code) => `tpc-host-${code}`;
 const roomCodeFromUrl = () => new URL(location.href).searchParams.get('room')?.toUpperCase() ?? null;
 
 function startSolo() {
   solo = true;
+  resultShownFor = null;
   const players = Object.fromEntries(COLORS.map((color, i) => [color, { name: `Player ${i + 1}`, online: true }]));
   room = { code: null, you: 'w', players, game: createGame() };
   viewStep = null;
@@ -92,7 +108,9 @@ function toast(text) {
 }
 
 function joinRoom(code) {
-  send({ type: 'join', code, token: localStorage.getItem(tokenKey(code)) });
+  send({
+    type: 'join', code, token: localStorage.getItem(tokenKey(code)), hostToken: localStorage.getItem(hostTokenKey(code)),
+  });
 }
 
 function connect() {
@@ -114,12 +132,16 @@ function connect() {
       sentMove = null;
       if (room?.game) renderBoard();
       toast(message.message);
+      // A rejected clock setting snaps back to the one the game has.
+      if (room && !room.game) syncClockSettings(true);
       if (!room) {
         history.replaceState(null, '', location.pathname);
         show('home');
       }
     } else if (message.type === 'seat') {
       localStorage.setItem(tokenKey(message.code), message.token);
+    } else if (message.type === 'host') {
+      localStorage.setItem(hostTokenKey(message.code), message.token);
     } else if (message.type === 'room') {
       receiveRoom(message);
     } else if (message.type === 'chatHistory') {
@@ -127,6 +149,9 @@ function connect() {
       message.messages.forEach(addChatMessage);
     } else if (message.type === 'chat') {
       addChatMessage(message.message);
+      if (phoneLayout.matches && !$('game').classList.contains('chat-open')) markChatUnread();
+    } else if (message.type === 'notice') {
+      toast(message.text);
     }
   };
 }
@@ -145,7 +170,12 @@ function receiveRoom(message) {
     viewStep = null;
     positions = [];
   }
+  // After a takeback the game is shorter, so cached positions past its end are stale.
+  const actions = message.game?.history?.length ?? 0;
+  if (positions.length > actions + 1) positions.length = actions + 1;
+  if (viewStep !== null && viewStep >= actions) viewStep = null;
   room = message;
+  clockReceivedAt = performance.now();
   sentMove = null;
   rememberLivePosition();
   const url = new URL(location.href);
@@ -161,6 +191,7 @@ function receiveRoom(message) {
 
 function renderLobby() {
   show('lobby');
+  const watching = !room.you && watchingCode === room.code;
   $('share-link').value = `${location.origin}${location.pathname}?room=${room.code}`;
   const seats = $('seats');
   seats.replaceChildren();
@@ -169,10 +200,10 @@ function renderLobby() {
     row.className = 'seat';
     row.append(colorLabel(color));
     const player = room.players[color];
-    const right = document.createElement(player || room.you ? 'span' : 'button');
+    const right = document.createElement(player || room.you || watching ? 'span' : 'button');
     if (player) {
       right.textContent = color === room.you ? `${player.name} (you)` : player.name;
-    } else if (room.you) {
+    } else if (room.you || watching) {
       right.textContent = 'Open';
     } else {
       right.textContent = 'Sit here';
@@ -184,7 +215,56 @@ function renderLobby() {
     row.append(right);
     seats.append(row);
   }
-  $('name').disabled = Boolean(room.you);
+  // Once seated, the name box renames you instead of naming the seat you pick.
+  if (room.you && document.activeElement !== $('name')) $('name').value = room.players[room.you].name;
+  const tc = room.timeControl;
+  // Written the standard way, minutes|increment, with an explanation behind the ? button.
+  $('time-control-text').textContent = tc ? `Clock: ${tc.minutes}|${tc.increment}` : 'No clock.';
+  $('time-control-help').hidden = !tc;
+  if (!tc) setTimeControlHelp(false);
+  else {
+    const s = (n) => (n === 1 ? '' : 's');
+    $('time-control-explained').textContent = `${tc.minutes}|${tc.increment} means each player starts with `
+      + `${tc.minutes} minute${s(tc.minutes)}, and gets ${tc.increment} second${s(tc.increment)} back after each move. `
+      + 'Your clock only runs on your turn. Your first move is untimed and earns no extra time.';
+  }
+  $('clock-settings').hidden = !room.isHost;
+  syncClockSettings();
+  const full = COLORS.every((c) => room.players[c]);
+  $('start').hidden = !room.isHost;
+  $('start').disabled = !full;
+  $('start').title = full ? '' : 'Waits for all three seats to be taken';
+  $('start-note').hidden = room.isHost || !full;
+  $('name').hidden = watching;
+  $('name-label').hidden = watching;
+  $('watching-note').hidden = !watching;
+  // Once seated you're playing, so there's nothing to switch.
+  $('watch').hidden = Boolean(room.you);
+  $('watch').textContent = watching ? 'Take a seat instead' : 'Just watch';
+}
+
+// Shows the game's time control in the creator's clock settings. A box being typed in is
+// left alone unless `force`, so updates from the server don't fight the typing.
+function syncClockSettings(force = false) {
+  if (!room?.isHost) return;
+  const tc = room.timeControl;
+  $('use-clock').checked = Boolean(tc);
+  $('clock-options').hidden = !tc;
+  if (!tc) return;
+  for (const [id, value] of [['clock-minutes', tc.minutes], ['clock-increment', tc.increment]]) {
+    if (force || document.activeElement !== $(id)) $(id).value = value;
+  }
+}
+
+function setTimeControlHelp(open) {
+  $('time-control-explained').hidden = !open;
+  $('time-control-help').setAttribute('aria-expanded', String(open));
+}
+
+function chosenTimeControl() {
+  return $('use-clock').checked
+    ? { minutes: Number($('clock-minutes').value), increment: Number($('clock-increment').value) }
+    : null;
 }
 
 function colorLabel(color) {
@@ -553,7 +633,10 @@ function renderLog() {
   $('history-start').disabled = currentStep() === 0;
   $('history-forward').disabled = viewStep === null;
   $('history-latest').disabled = viewStep === null;
-  $('undo').disabled = !solo || !game.history?.length;
+  $('undo').disabled = solo ? !game.history?.length : !room.canTakeBack;
+  const undoLabel = solo ? 'Undo' : 'Ask to take back your move';
+  $('undo').title = undoLabel;
+  $('undo').setAttribute('aria-label', undoLabel);
 }
 
 // ---- Chat ----
@@ -564,7 +647,8 @@ function addChatMessage({ color, name, text }) {
   const atBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 4;
   const entry = document.createElement('li');
   const swatch = document.createElement('span');
-  swatch.className = `swatch ${color}`;
+  // Messages posted under a made-up name may have no seat colour.
+  swatch.className = color ? `swatch ${color}` : '';
   const author = document.createElement('span');
   author.className = 'chat-name';
   author.textContent = `${name}: `;
@@ -609,6 +693,14 @@ function renderPanel() {
   $('status').replaceChildren(...statusParts());
   $('status').className = viewStep !== null ? 'viewing' : isMyTurn() ? 'yours' : '';
 
+  if (!editingName) renderPlayers(game);
+  renderLog();
+
+  const live = room.game;
+  $('resign').disabled = !room.you || live.status !== 'active' || !live.alive[room.you];
+}
+
+function renderPlayers(game) {
   const list = $('players');
   list.replaceChildren();
   for (const color of COLORS) {
@@ -621,6 +713,15 @@ function renderPanel() {
     name.textContent = !solo && color === room.you ? `${player.name} (you)` : player.name;
     if (!game.alive[color]) name.className = 'dead';
     item.append(swatch, name);
+    if (!solo && color === room.you) {
+      const edit = document.createElement('button');
+      edit.className = 'rename';
+      edit.textContent = '✎';
+      edit.title = 'Change your name';
+      edit.setAttribute('aria-label', 'Change your name');
+      edit.addEventListener('click', () => startRename(item, name, player.name));
+      item.append(edit);
+    }
     const addTag = (text, className) => {
       const tag = document.createElement('span');
       tag.className = className;
@@ -629,26 +730,232 @@ function renderPanel() {
     };
     if (game.status === 'active' && game.alive[color] && isInCheck(game, color)) addTag('check', 'check');
     if (!player.online) addTag('offline', 'tag');
+    if (room.clock) {
+      const clock = document.createElement('span');
+      clock.className = 'clock';
+      clock.dataset.color = color;
+      item.append(clock);
+    }
     list.append(item);
   }
+  renderClocks();
+}
 
-  renderLog();
+// ---- Clocks ----
 
-  const live = room.game;
-  $('resign').disabled = !room.you || live.status !== 'active' || !live.alive[room.you];
+const LOW_TIME_MS = 60000;
+
+// 1:05:00, 4:59, and tenths under ten seconds: 0:09.4
+function formatClock(ms) {
+  const tenths = Math.floor(ms / 100);
+  const seconds = Math.floor(tenths / 10);
+  const [h, m, s] = [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60];
+  const pad = (n) => String(n).padStart(2, '0');
+  if (h) return `${h}:${pad(m)}:${pad(s)}`;
+  return ms < 10000 ? `${m}:${pad(s)}.${tenths % 10}` : `${m}:${pad(s)}`;
+}
+
+function renderClocks() {
+  if (!room?.clock) return;
+  const { left, running } = room.clock;
+  const elapsed = performance.now() - clockReceivedAt;
+  for (const element of document.querySelectorAll('#players .clock')) {
+    const { color } = element.dataset;
+    const ms = Math.max(0, left[color] - (color === running ? elapsed : 0));
+    element.textContent = formatClock(ms);
+    element.classList.toggle('running', color === running);
+    element.classList.toggle('low', ms < LOW_TIME_MS && room.game.alive[color]);
+  }
+}
+
+// Only the running clock changes, so this just repaints the numbers.
+setInterval(() => {
+  if (room?.clock?.running && !$('game').hidden) renderClocks();
+}, 100);
+
+// Swaps your name in the player list for a text box. Enter or clicking away saves it,
+// Escape cancels.
+function startRename(item, nameElement, current) {
+  editingName = true;
+  const input = document.createElement('input');
+  input.className = 'rename-input';
+  input.maxLength = 24;
+  input.value = current;
+  input.setAttribute('aria-label', 'Your name');
+  const finish = (save) => {
+    if (!editingName) return;
+    editingName = false;
+    const name = input.value.trim();
+    if (save && name && name !== current) {
+      rename(name);
+      $('name').value = name;
+    }
+    renderPanel();
+  };
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') finish(true);
+    if (event.key === 'Escape') finish(false);
+  });
+  input.addEventListener('blur', () => finish(true));
+  item.replaceChildren(item.firstChild, input, ...item.querySelectorAll('.clock'));
+  input.focus();
+  input.select();
+}
+
+function rename(name) {
+  localStorage.setItem('tpc-name', name);
+  send({ type: 'rename', name });
+}
+
+// The takeback request, if there is one, with a row per voter: their colour, then a tick
+// and a cross. Only your own row can be clicked, and everyone sees who has agreed.
+// A no ends the request at once, so a cast vote is always a yes.
+function renderTakeback() {
+  const request = room.takeback;
+  $('takeback').hidden = !request;
+  $('takeback').classList.toggle('attention', Boolean(request?.voters.includes(room.you)
+    && !request.accepted.includes(room.you)));
+  if (!request) return;
+  renderTakebackText();
+  $('takeback-votes').replaceChildren(...request.voters.map((color) => {
+    const name = room.players[color].name;
+    const agreed = request.accepted.includes(color);
+    const canVote = color === room.you && !agreed;
+    const row = document.createElement('div');
+    row.className = 'vote';
+    const swatch = document.createElement('span');
+    swatch.className = `swatch ${color}`;
+    swatch.title = name;
+    swatch.setAttribute('role', 'img');
+    swatch.setAttribute('aria-label', name);
+    const button = (symbol, accept, label) => {
+      const element = document.createElement('button');
+      element.textContent = symbol;
+      element.disabled = !canVote;
+      element.title = canVote ? label : `${name}${agreed ? ' agreed' : ' has not voted yet'}`;
+      element.setAttribute('aria-label', canVote ? label : element.title);
+      if (accept && agreed) element.classList.add('chosen');
+      element.addEventListener('click', () => send({ type: 'answerTakeback', accept }));
+      return element;
+    };
+    row.append(swatch, button('\u2713', true, 'Agree to the takeback'), button('\u2715', false, 'Refuse the takeback'));
+    return row;
+  }));
+}
+
+// The heading, with the seconds left before an unanswered request is declined.
+function renderTakebackText() {
+  const request = room?.takeback;
+  if (!request) return;
+  const seconds = Math.ceil(Math.max(0, request.expiresIn - (performance.now() - clockReceivedAt)) / 1000);
+  const who = request.by === room.you ? 'You' : room.players[request.by].name;
+  $('takeback-text').textContent = `${who} requested a takeback (${seconds}s)`;
+}
+
+setInterval(() => {
+  if (room?.takeback && !$('game').hidden) renderTakebackText();
+}, 250);
+
+// ---- End of game ----
+
+// Pops up the result once when a game ends, or when you open one that already has.
+// A takeback of the winning move reopens the game, so it can pop up again later.
+function showResultOnce() {
+  const game = room.game;
+  const key = solo ? 'solo' : room.code;
+  $('leave-game').hidden = game.status === 'active';
+  if (game.status === 'active') {
+    if (resultShownFor === key) resultShownFor = null;
+    if ($('result').open) $('result').close();
+    return;
+  }
+  if (resultShownFor === key) return;
+  resultShownFor = key;
+  const winner = game.winner;
+  $('result-title').textContent = game.status === 'draw' ? 'Draw'
+    : winner === room.you && !solo ? 'You win!'
+      : `${room.players[winner].name} wins!`;
+  // The last log line says how it ended: "Gray is checkmated", "Black times out", ...
+  $('result-detail').textContent = `${game.log.at(-1)}.`;
+  $('result').showModal();
+}
+
+// Back to the home screen, to create or join another game.
+function returnToLobby() {
+  if ($('result').open) $('result').close();
+  // Without a game server there is no lobby to go to, just a fresh board.
+  if (boardOnly) {
+    startSolo();
+    return;
+  }
+  if (!solo) send({ type: 'leave' });
+  solo = false;
+  room = null;
+  viewStep = null;
+  positions = [];
+  selected = null;
+  pendingPromotion = null;
+  resultShownFor = null;
+  $('chat-messages').replaceChildren();
+  setChatOpen(false);
+  history.replaceState(null, '', location.pathname);
+  show('home');
+}
+
+// Lights up the closed chat's button: three quick flashes for each new message, then a
+// steady glow and a dot until the chat is opened.
+function markChatUnread() {
+  const button = $('chat-toggle');
+  $('chat-dot').hidden = false;
+  button.classList.add('unread');
+  // Restart the flashing if it is still going from an earlier message.
+  button.classList.remove('flash');
+  void button.offsetWidth;
+  button.classList.add('flash');
+}
+
+function setChatOpen(open) {
+  $('game').classList.toggle('chat-open', open);
+  $('chat-toggle').setAttribute('aria-expanded', String(open));
+  if (!open) return;
+  $('chat-dot').hidden = true;
+  $('chat-toggle').classList.remove('unread', 'flash');
+  const list = $('chat-messages');
+  list.scrollTop = list.scrollHeight;
+  $('chat').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
 function renderGame() {
   show('game');
+  renderTakeback();
   $('chat').hidden = solo;
+  $('chat-toggle').hidden = solo;
   $('chat-form').hidden = !room.you;
   renderBoard();
   renderPanel();
+  showResultOnce();
 }
 
 // ---- Wiring ----
 
-$('create').addEventListener('click', () => send({ type: 'create' }));
+$('start').addEventListener('click', () => send({ type: 'start' }));
+$('chat-toggle').addEventListener('click', () => setChatOpen(!$('game').classList.contains('chat-open')));
+$('review').addEventListener('click', () => $('result').close());
+$('to-lobby').addEventListener('click', returnToLobby);
+$('leave-game').addEventListener('click', returnToLobby);
+$('time-control-help').addEventListener('click', () => {
+  setTimeControlHelp($('time-control-explained').hidden);
+});
+// New games start with the clock settings of the last game you created.
+$('create').addEventListener('click', () => send({ type: 'create', timeControl: chosenTimeControl() }));
+for (const id of ['use-clock', 'clock-minutes', 'clock-increment']) {
+  $(id).addEventListener('change', () => {
+    $('clock-options').hidden = !$('use-clock').checked;
+    const timeControl = chosenTimeControl();
+    localStorage.setItem('tpc-clock', JSON.stringify({ useClock: Boolean(timeControl), ...(timeControl ?? {}) }));
+    send({ type: 'setTimeControl', timeControl });
+  });
+}
 $('solo').addEventListener('click', startSolo);
 $('join-form').addEventListener('submit', (event) => {
   event.preventDefault();
@@ -669,7 +976,17 @@ $('resign').addEventListener('click', () => {
   viewStep = null;
   send({ type: 'resign' });
 });
-$('undo').addEventListener('click', undoSolo);
+$('undo').addEventListener('click', () => {
+  if (solo) undoSolo();
+  else send({ type: 'takeback' });
+});
+$('name').addEventListener('change', () => {
+  if (room?.you && $('name').value.trim()) rename($('name').value);
+});
+$('watch').addEventListener('click', () => {
+  watchingCode = watchingCode === room.code ? null : room.code;
+  renderLobby();
+});
 $('board').addEventListener('pointerdown', startPress);
 $('board').addEventListener('touchmove', holdTouch, { passive: false });
 $('board').addEventListener('pointermove', movePress);
@@ -714,7 +1031,20 @@ document.addEventListener('keydown', (event) => {
   goToStep(currentStep() + delta);
 });
 $('name').value = localStorage.getItem('tpc-name') ?? '';
+// The clock settings from the last game you created.
+try {
+  const saved = JSON.parse(localStorage.getItem('tpc-clock'));
+  if (saved) {
+    $('use-clock').checked = saved.useClock;
+    $('clock-options').hidden = !saved.useClock;
+    if (saved.minutes) $('clock-minutes').value = saved.minutes;
+    if (saved.increment !== undefined) $('clock-increment').value = saved.increment;
+  }
+} catch {}
 
-// GitHub Pages has no game server, so that copy of the site is only the analysis board.
-if (location.hostname.endsWith('.github.io') || new URL(location.href).searchParams.has('solo')) startSolo();
-else connect();
+if (boardOnly) {
+  for (const id of ['to-lobby', 'leave-game']) $(id).textContent = 'New board';
+  startSolo();
+} else {
+  connect();
+}

@@ -62,8 +62,25 @@ button:disabled { opacity: .55; cursor: default; }
 button.primary { background: var(--accent); color: #2b211a; font-weight: 600; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+.card label.check { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--text); font-size: 15px; }
+.check input { width: auto; margin: 0; }
+#clock-settings { display: flex; flex-direction: column; gap: 10px; }
+#time-control { display: flex; align-items: center; gap: 8px; }
+.card button.help {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 22px;
+  border-radius: 50%;
+}
+#time-control-explained { font-size: 14px; }
+#clock-options > div { flex: 1; }
+
 #seats { display: flex; flex-direction: column; gap: 8px; }
 .seat { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.seat button { padding: 5px 12px; font-size: 14px; }
 
 .swatch {
   display: inline-block;
@@ -106,6 +123,49 @@ aside {
 #status.yours { background: var(--accent); color: #2b211a; }
 #status.viewing { background: #35566e; }
 
+#leave-game { background: var(--raised); }
+
+#result {
+  width: min(360px, calc(100vw - 32px));
+  padding: 24px;
+  color: var(--text);
+  text-align: center;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+}
+#result::backdrop { background: rgba(0, 0, 0, .55); }
+#result h2 { margin: 0 0 8px; font-size: 24px; }
+#result p { margin: 0 0 18px; color: var(--muted); }
+#result .row button { flex: 1; }
+#result button:not(.primary) { background: var(--raised); }
+
+#takeback {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 11px 13px;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+}
+/* Pulses while you still have to vote, so a request doesn't go unnoticed. */
+#takeback.attention { animation: takeback-glow 1.2s ease-in-out infinite; }
+@keyframes takeback-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(217, 164, 65, 0); }
+  50% { box-shadow: 0 0 16px 4px rgba(217, 164, 65, .75); background: #5e4b3a; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #takeback.attention { animation: none; box-shadow: 0 0 12px 3px rgba(217, 164, 65, .6); }
+}
+#takeback-votes { display: flex; flex-wrap: wrap; gap: 6px 22px; }
+.vote { display: flex; align-items: center; gap: 6px; }
+.vote .swatch { width: 18px; height: 18px; margin-right: 4px; }
+.vote button { width: 38px; padding: 4px 0; font-weight: 700; }
+.vote button:disabled { opacity: .45; }
+/* A vote that's been cast stays bright, so everyone can see it. */
+.vote button.chosen, .vote button.chosen:disabled { opacity: 1; color: #fff; background: #4f8a4b; }
+
 #players {
   list-style: none;
   margin: 0;
@@ -113,11 +173,26 @@ aside {
   background: var(--panel);
   border-radius: 8px;
 }
-#players li { padding: 5px 0; overflow-wrap: anywhere; }
+#players li { display: flex; align-items: center; gap: 4px; padding: 5px 0; overflow-wrap: anywhere; }
+/* Only the name gives way when a row is tight: the circle, buttons and clock keep their size. */
+#players li > :not(.rename-input) { flex-shrink: 0; }
+#players li > span:not(.swatch, .tag, .check, .clock) { flex-shrink: 1; min-width: 0; }
 #players .turn { font-weight: 700; }
 #players .tag { color: var(--muted); font-size: 13px; }
 #players .check { color: #ff9c8f; font-size: 13px; font-weight: 600; }
 #players .dead { text-decoration: line-through; color: var(--muted); }
+#players .rename { margin-left: 6px; padding: 0 6px; font-size: 13px; line-height: 1.6; }
+#players .rename-input { flex: 1 1 0; width: auto; min-width: 0; max-width: 11em; padding: 1px 6px; font-size: 14px; }
+#players .clock {
+  margin-left: auto;
+  padding: 1px 7px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+  color: var(--muted);
+  border-radius: 5px;
+}
+#players .clock.running { color: var(--text); background: var(--raised); font-weight: 600; }
+#players .clock.low { color: var(--text); background: #8c3a2e; }
 
 #log {
   flex: 0 1 180px;
@@ -157,6 +232,25 @@ aside {
 #history-nav button { letter-spacing: -2px; }
 #resign { background: #8c3a2e; }
 #history-nav svg { display: block; width: 18px; height: 18px; margin: auto; fill: currentColor; }
+/* Phones only: there, chat opens and closes from the button row. */
+#chat-toggle { display: none; position: relative; }
+#chat-toggle.unread { box-shadow: 0 0 10px 2px rgba(217, 164, 65, .65); }
+#chat-toggle.flash { animation: chat-flash .5s ease-in-out 3; }
+@keyframes chat-flash {
+  50% { color: #2b211a; background: var(--accent); box-shadow: 0 0 16px 5px rgba(217, 164, 65, .85); }
+}
+@media (prefers-reduced-motion: reduce) {
+  #chat-toggle.flash { animation: none; }
+}
+#chat-dot {
+  position: absolute;
+  top: 5px;
+  right: calc(50% - 15px);
+  width: 9px;
+  height: 9px;
+  background: var(--accent);
+  border-radius: 50%;
+}
 
 #chat { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
 #chat-messages {
@@ -185,6 +279,7 @@ aside {
   padding: 10px 16px;
   background: #8c2f25;
   border-radius: 8px;
+  z-index: 30;
 }
 
 /* Board */
@@ -224,11 +319,48 @@ aside {
 .promotion-choice:hover circle { fill: #e8d9bf; }
 .promotion-choice:focus-visible circle { stroke: #fff; stroke-width: 5; }
 
+/* Phones: players and clocks above the board, one row of buttons below it, and chat behind
+   a button. The side panel's parts join the page's column so they can sit either side of the
+   board. The move list is left out to save room. */
 @media (max-width: 800px) {
-  #game { flex-direction: column; align-items: stretch; padding: 8px; }
-  #board-wrap { flex: none; }
-  aside { flex: none; max-height: none; }
-  #log { flex: none; height: 140px; }
+  #game { flex-direction: column; align-items: stretch; gap: 8px; padding: 8px; }
+  aside { display: contents; }
+  #status { order: 1; padding: 7px 12px; }
+  #players { order: 2; padding: 2px 12px; }
+  #players li { padding: 3px 0; }
+  /* Floats over the bottom of the screen, so a request never moves the board, and stays in
+     view however far down the page you are. */
+  #takeback {
+    position: fixed;
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    z-index: 20;
+    gap: 6px;
+    padding: 10px 12px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, .55);
+  }
+  /* Room to scroll the chat box clear of the floating request. */
+  #game:has(#takeback:not([hidden])) { padding-bottom: 120px; }
+  #board-wrap { order: 4; flex: none; }
+  #history-nav { order: 5; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+  /* The analysis board has no chat, so its six buttons share the row. */
+  #history-nav:has(#chat-toggle[hidden]) { grid-template-columns: repeat(6, 1fr); }
+  #leave-game { order: 6; }
+  #chat { order: 7; }
+  #log { display: none; }
+  #game:not(.chat-open) #chat { display: none; }
   #chat-messages { flex: none; height: 190px; }
+  #chat-toggle { display: block; }
+  #game.chat-open #chat-toggle { color: #2b211a; background: var(--accent); }
+  /* In reading order: to the start, back, forward, to the latest, then the actions. */
+  #history-start { order: 1; }
+  #history-back { order: 2; }
+  #history-forward { order: 3; }
+  #history-latest { order: 4; }
+  #undo { order: 5; }
+  #resign { order: 6; }
+  #chat-toggle { order: 7; }
+  #history-nav button { padding: 8px 0; }
   .card { margin: 16px; }
 }
