@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createGame, legalMoves, applyMove, resign, replayAction, isInCheck, isLightSquare, sq, rankOf, COLORS, SQUARES,
+  createGame, legalMoves, applyMove, resign, timeOut, replayAction, isInCheck, isLightSquare, sq, rankOf, COLORS, SQUARES,
 } from '../shared/engine.js';
 
 // Builds a position from { square: 'wK' }. Pieces default to having moved so
@@ -500,6 +500,17 @@ test('resigning on your turn passes it on', () => {
   const state = resign(position(KINGS), 'w');
   assert.equal(state.turn, 'g');
   assert.equal(state.alive.w, false);
+});
+
+test('running out of time knocks the player on move out and passes the turn on', () => {
+  const start = position(KINGS);
+  assert.throws(() => timeOut(start, 'g'), /Cannot time out/, 'only the player on move');
+  const state = timeOut(start, 'w');
+  assert.equal(state.alive.w, false);
+  assert.equal(state.turn, 'g');
+  assert.deepEqual(state.log.slice(-1), ['White times out']);
+  assert.deepEqual(state.history.at(-1), { timeOut: 'w', logEnd: state.log.length });
+  assert.deepEqual(replayAction(start, state.history.at(-1)), state, 'replays from history');
 });
 
 // Gray's rooks cover everything round white's king without checking it.

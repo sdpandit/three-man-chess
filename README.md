@@ -2,7 +2,7 @@
 
 Online three-player chess on a round board: 6 ranks, 24 files, 144 squares, and a
 hole in the middle. One person creates a game and sends the link to the other two.
-Everyone picks a colour, and the game starts when all three seats are taken.
+Everyone picks a colour, and the creator starts the game once all three seats are taken.
 Closing the tab is fine: the same browser gets its seat back from the link.
 
 ## Run it
@@ -24,8 +24,17 @@ Move pieces by dragging them or by clicking the piece and then its destination. 
 dropped on an illegal square goes back where it started.
 
 During a game, click any move in the history or use the left and right arrow keys to
-look at past positions. Moves can only be made from the latest position. Undo only works
-on the analysis board, and is greyed out in online games.
+look at past positions. Moves can only be made from the latest position. On the analysis
+board, undo takes back the last action. Online, it asks to take back your last move: you
+can ask once, until the next move is made, and it only happens if every other player
+still in the game agrees, counting anyone the move knocked out. Clocks go back to where
+they stood when the move was made. A request that isn't fully answered within 15 seconds
+is declined, and if the player on move agrees, their clock waits while the others decide.
+
+Whoever creates an online game can give it a clock from the waiting room, until the game
+starts: minutes each, plus seconds added after every move. A player's clock only runs on
+their turn, and not during their first move, which earns no increment. Running out of time knocks you out like
+resigning. Clocks pause while the server is down.
 
 Online games also have a chat. Players can write in it, and anyone with the game link can read it.
 Players can rename themselves at any time with the ✎ next to their name, and their past

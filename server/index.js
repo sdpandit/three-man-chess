@@ -7,7 +7,10 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
-import { createGame, applyMove, resign, COLORS } from '../shared/engine.js';
+import { createGame, applyMove, resign, timeOut, COLORS } from '../shared/engine.js';
+import {
+  parseTimeControl, createClock, runningColor, timeLeft, settle, hasFlagged, pause, resume,
+} from './clock.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.env.PORT) || 3000;
@@ -17,6 +20,8 @@ const MAX_ROOMS = 1000;
 const MAX_CHAT_MESSAGES = 200;
 const MAX_CHAT_LENGTH = 300;
 const CHAT_COOLDOWN_MS = 250;
+// A takeback request is declined if not everyone has answered within this long.
+const TAKEBACK_TIMEOUT_MS = Number(process.env.TAKEBACK_TIMEOUT_MS) || 15000;
 const ADMIN_TOKEN_FILE = path.join(path.dirname(DATA_FILE), 'admin-token');
 
 // Only these files are ever served, so there is no path handling to get wrong.
@@ -27,10 +32,18 @@ const STATIC_FILES = {
   '/engine.js': ['shared/engine.js', 'text/javascript; charset=utf-8'],
 };
 
-// code -> { code, game, seats: { w: { name, token } | null, ... }, updatedAt }
+// code -> { code, game, seats: { w: { name, token } | null, ... }, chat, timeControl, clock,
+//           undo, takeback, hostToken, updatedAt }
+// timeControl is { minutes, increment } or null, and clock is set once the game starts.
+// hostToken belongs to whoever created the room, who can change the time control until then.
+// undo is what the latest move can be taken back to, and takeback a pending request for it.
 const rooms = new Map();
 // code -> Map(socket -> color | null)
 const sockets = new Map();
+// code -> the timer that ends the turn of the player on move when their clock runs out
+const flagTimers = new Map();
+// code -> the timer that declines a takeback request nobody finished answering
+const takebackTimers = new Map();
 
 function loadRooms() {
   try {
@@ -38,7 +51,16 @@ function loadRooms() {
       // Games saved before moats existed keep playing with all three.
       if (room.game) room.game.moats ??= createGame().moats;
       room.chat ??= [];
+      room.timeControl ??= null;
+      // Clocks stop while the server is down, rather than charging whoever was on move.
+      if (room.clock) room.clock.since = Date.now();
       rooms.set(room.code, room);
+      scheduleFlag(room);
+      // A pending request keeps the time it had left when last saved, as the clocks do.
+      if (room.takeback) {
+        const left = (room.takeback.expiresAt ?? 0) - room.updatedAt;
+        scheduleTakebackExpiry(room, Math.min(Math.max(left, 0), TAKEBACK_TIMEOUT_MS));
+      }
     }
     console.log(`Restored ${rooms.size} game(s) from ${DATA_FILE}`);
   } catch (err) {
@@ -70,11 +92,17 @@ function touch(room) {
 function pruneRooms() {
   const cutoff = Date.now() - ROOM_TTL_MS;
   for (const [code, room] of rooms) {
-    if (room.updatedAt < cutoff && !sockets.get(code)?.size) rooms.delete(code);
+    if (room.updatedAt < cutoff && !sockets.get(code)?.size) {
+      rooms.delete(code);
+      clearTimeout(flagTimers.get(code));
+      flagTimers.delete(code);
+      clearTimeout(takebackTimers.get(code));
+      takebackTimers.delete(code);
+    }
   }
 }
 
-function newRoom() {
+function newRoom(timeControl) {
   pruneRooms();
   if (rooms.size >= MAX_ROOMS) throw new Error('Server is full, try again later');
   // No easily confused characters, since people may read these out to friends.
@@ -83,7 +111,9 @@ function newRoom() {
   do {
     code = [...randomBytes(6)].map((b) => alphabet[b % alphabet.length]).join('');
   } while (rooms.has(code));
-  const room = { code, game: null, seats: { w: null, g: null, b: null }, chat: [], updatedAt: Date.now() };
+  const room = {
+    code, game: null, seats: { w: null, g: null, b: null }, chat: [], timeControl, clock: null, updatedAt: Date.now(),
+  };
   rooms.set(code, room);
   scheduleSave();
   return room;
@@ -99,15 +129,127 @@ function broadcast(room) {
   const players = Object.fromEntries(COLORS.map((color) => [color, room.seats[color]
     ? { name: room.seats[color].name, online: online.has(color) }
     : null]));
+  const takeback = room.takeback && {
+    by: room.undo.by,
+    voters: room.takeback.voters,
+    accepted: room.takeback.accepted,
+    expiresIn: Math.max(0, room.takeback.expiresAt - Date.now()),
+  };
+  // Times are as of sending, and the browser counts down the running one from there.
+  const clock = room.clock && room.game && {
+    left: timeLeft(room.clock, room.game, Date.now()),
+    running: runningColor(room.clock, room.game),
+  };
   for (const [socket, color] of connected) {
-    send(socket, { type: 'room', code: room.code, you: color, players, game: room.game });
+    send(socket, {
+      type: 'room', code: room.code, you: color, players, game: room.game, timeControl: room.timeControl, clock,
+      takeback, canTakeBack: Boolean(color) && canTakeBack(room, color), isHost: isHost(room, socket),
+    });
   }
 }
 
-// Names are shown as text, never as HTML, so only their length needs limiting.
+// Every change to a running game goes through here. It charges the turn that just ended
+// to the clock, credits the increment to `mover`, and starts the next player's time.
+// `update` gets the game and returns the new one, or throws to leave everything as it was.
+function updateGame(room, update, mover = null) {
+  const now = Date.now();
+  // A move arriving just after the time ran out must not beat the clock.
+  flagIfOut(room, now);
+  const before = room.game;
+  // A takeback puts the clocks back to the moment the move was made, without its increment.
+  const clockAtMove = room.clock && {
+    ...structuredClone(room.clock), remaining: timeLeft(room.clock, before, now), paused: false,
+  };
+  const next = update(before);
+  if (room.clock) settle(room.clock, before, now, mover);
+  room.game = next;
+  movedOn(room);
+  if (mover && next.history) {
+    room.undo = { by: mover, game: before, clock: clockAtMove, step: next.history.length, asked: false };
+  }
+  gameChanged(room);
+}
+
+// The game changed, so the last move can no longer be taken back, and a request to
+// take it back is declined.
+function movedOn(room) {
+  room.undo = null;
+  endTakeback(room, 'The game moved on, so the takeback was declined');
+}
+
+// Clears a pending request that didn't go through, restarting the clock of a player on
+// move who had paused it by agreeing.
+function endTakeback(room, notice) {
+  if (!room.takeback) return;
+  clearTimeout(takebackTimers.get(room.code));
+  takebackTimers.delete(room.code);
+  room.takeback = null;
+  resume(room.clock, Date.now());
+  scheduleFlag(room);
+  notify(room, notice);
+}
+
+function scheduleTakebackExpiry(room, ms) {
+  const request = room.takeback;
+  request.expiresAt = Date.now() + ms;
+  clearTimeout(takebackTimers.get(room.code));
+  takebackTimers.set(room.code, setTimeout(() => {
+    if (room.takeback !== request) return;
+    endTakeback(room, 'Not everyone answered in time, so the takeback was declined');
+    touch(room);
+    broadcast(room);
+  }, ms));
+}
+
+function notify(room, text) {
+  for (const client of sockets.get(room.code)?.keys() ?? []) send(client, { type: 'notice', text });
+}
+
+// You can ask once, for your own move, until the next action in the game.
+function canTakeBack(room, color) {
+  const { undo } = room;
+  return Boolean(undo) && undo.by === color && !undo.asked && room.game.history?.length === undo.step;
+}
+
+function gameChanged(room) {
+  scheduleFlag(room);
+  touch(room);
+  broadcast(room);
+}
+
+// Knocks out the player on move if their time is up. Returns whether it did.
+function flagIfOut(room, now) {
+  if (!room.clock || !hasFlagged(room.clock, room.game, now)) return false;
+  const color = runningColor(room.clock, room.game);
+  settle(room.clock, room.game, now);
+  room.game = timeOut(room.game, color);
+  movedOn(room);
+  gameChanged(room);
+  return true;
+}
+
+function scheduleFlag(room) {
+  clearTimeout(flagTimers.get(room.code));
+  flagTimers.delete(room.code);
+  const color = room.clock && runningColor(room.clock, room.game);
+  if (!color) return;
+  const ms = timeLeft(room.clock, room.game, Date.now())[color];
+  flagTimers.set(room.code, setTimeout(() => {
+    if (!flagIfOut(room, Date.now())) scheduleFlag(room);
+  }, ms + 20));
+}
+
+// Whether this connection is the room's creator. Rooms saved before creators were tracked
+// have no host token, so there any seated player counts as one, or nobody could start them.
+function isHost(room, socket) {
+  if (!room.hostToken) return Boolean(sockets.get(room.code)?.get(socket));
+  return socket.hostOf === room.code;
+}
+
 // What players see of a chat message: nothing marks one posted under a made-up name.
 const publicChat = ({ color, name, text }) => ({ color, name, text });
 
+// Names are shown as text, never as HTML, so only their length needs limiting.
 const cleanName = (name) => String(name ?? '').trim().slice(0, 24) || 'Player';
 
 function attach(socket, room, color) {
@@ -129,19 +271,34 @@ function detach(socket) {
 }
 
 const handlers = {
-  create(socket) {
-    const room = newRoom();
+  // The time control given here is only a starting point: the creator can change it in the lobby.
+  create(socket, { timeControl }) {
+    const room = newRoom(parseTimeControl(timeControl));
+    room.hostToken = randomBytes(24).toString('hex');
     attach(socket, room, null);
+    socket.hostOf = room.code;
+    send(socket, { type: 'host', code: room.code, token: room.hostToken });
     broadcast(room);
   },
 
-  // Open a room, retaking a seat if the token matches one.
-  join(socket, { code, token }) {
+  // Open a room, retaking a seat if the token matches one, and the creator's
+  // say over the clock if the host token does.
+  join(socket, { code, token, hostToken }) {
     const room = rooms.get(String(code ?? '').toUpperCase());
     if (!room) throw new Error('That game does not exist');
     const color = COLORS.find((c) => token && room.seats[c]?.token === token) ?? null;
     attach(socket, room, color);
+    socket.hostOf = hostToken && room.hostToken === hostToken ? room.code : null;
     send(socket, { type: 'chatHistory', messages: room.chat.map(publicChat) });
+    broadcast(room);
+  },
+
+  setTimeControl(socket, { timeControl }) {
+    const room = socket.room;
+    if (!room || !isHost(room, socket)) throw new Error('Only whoever created the game can change the clock');
+    if (room.game) throw new Error('The game has already started');
+    room.timeControl = parseTimeControl(timeControl);
+    touch(room);
     broadcast(room);
   },
 
@@ -156,7 +313,18 @@ const handlers = {
     room.seats[color] = { name: cleanName(name), token };
     sockets.get(room.code).set(socket, color);
     send(socket, { type: 'seat', code: room.code, token });
-    if (COLORS.every((c) => room.seats[c])) room.game = createGame();
+    touch(room);
+    broadcast(room);
+  },
+
+  // The creator starts the game once every seat is taken.
+  start(socket) {
+    const room = socket.room;
+    if (!room || !isHost(room, socket)) throw new Error('Only whoever created the game can start it');
+    if (room.game) throw new Error('The game has already started');
+    if (!COLORS.every((c) => room.seats[c])) throw new Error('Wait until all three seats are taken');
+    room.game = createGame();
+    if (room.timeControl) room.clock = createClock(room.timeControl, Date.now());
     touch(room);
     broadcast(room);
   },
@@ -186,10 +354,10 @@ const handlers = {
     const room = socket.room;
     const color = room && sockets.get(room.code).get(socket);
     if (!room?.game || !color) throw new Error('You are not playing in this game');
-    if (room.game.turn !== color) throw new Error('It is not your turn');
-    room.game = applyMove(room.game, { from, to, promotion });
-    touch(room);
-    broadcast(room);
+    updateGame(room, (game) => {
+      if (game.turn !== color) throw new Error('It is not your turn');
+      return applyMove(game, { from, to, promotion });
+    }, color);
   },
 
   // Anyone with the link can read the chat, but only seated players can write in it.
@@ -209,13 +377,56 @@ const handlers = {
     for (const client of sockets.get(room.code).keys()) send(client, { type: 'chat', message });
   },
 
+  // Asks the others to let you take back your last move. Everyone still in the game before
+  // that move gets a vote, including anyone it knocked out.
+  takeback(socket) {
+    const room = socket.room;
+    const color = room && sockets.get(room.code).get(socket);
+    if (!room?.game || !color) throw new Error('You are not playing in this game');
+    if (!canTakeBack(room, color)) throw new Error('You can only ask once, before the next move');
+    room.undo.asked = true;
+    room.takeback = { voters: COLORS.filter((c) => c !== color && room.undo.game.alive[c]), accepted: [] };
+    scheduleTakebackExpiry(room, TAKEBACK_TIMEOUT_MS);
+    touch(room);
+    broadcast(room);
+  },
+
+  answerTakeback(socket, { accept }) {
+    const room = socket.room;
+    const color = room && sockets.get(room.code).get(socket);
+    const request = room?.takeback;
+    if (!request || !request.voters.includes(color)) throw new Error('There is nothing for you to answer');
+    if (request.accepted.includes(color)) throw new Error('You already agreed');
+    const name = (c) => room.seats[c].name;
+    if (!accept) {
+      endTakeback(room, `${name(color)} declined the takeback`);
+    } else {
+      request.accepted.push(color);
+      if (request.accepted.length === request.voters.length) {
+        const { by, game, clock } = room.undo;
+        clearTimeout(takebackTimers.get(room.code));
+        takebackTimers.delete(room.code);
+        room.game = game;
+        if (clock) room.clock = { ...clock, since: Date.now(), paused: false };
+        room.undo = null;
+        room.takeback = null;
+        notify(room, `${name(by)}'s move was taken back`);
+        scheduleFlag(room);
+      } else if (room.clock && runningColor(room.clock, room.game) === color) {
+        // The player on move agreed, so their clock waits for the others.
+        pause(room.clock, room.game, Date.now());
+        scheduleFlag(room);
+      }
+    }
+    touch(room);
+    broadcast(room);
+  },
+
   resign(socket) {
     const room = socket.room;
     const color = room && sockets.get(room.code).get(socket);
     if (!room?.game || !color) throw new Error('You are not playing in this game');
-    room.game = resign(room.game, color);
-    touch(room);
-    broadcast(room);
+    updateGame(room, (game) => resign(game, color));
   },
 };
 

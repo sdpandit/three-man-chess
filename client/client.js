@@ -38,9 +38,12 @@ let sentMove = null;
 let watchingCode = null;
 // True while you're typing a new name in the player list, so updates don't wipe it out.
 let editingName = false;
+// When the latest clock times arrived, by performance.now(), to count down from.
+let clockReceivedAt = 0;
 const DRAG_THRESHOLD_PX = 6;
 
 const tokenKey = (code) => `tpc-token-${code}`;
+const hostTokenKey = (code) => `tpc-host-${code}`;
 const roomCodeFromUrl = () => new URL(location.href).searchParams.get('room')?.toUpperCase() ?? null;
 
 function startSolo() {
@@ -97,7 +100,9 @@ function toast(text) {
 }
 
 function joinRoom(code) {
-  send({ type: 'join', code, token: localStorage.getItem(tokenKey(code)) });
+  send({
+    type: 'join', code, token: localStorage.getItem(tokenKey(code)), hostToken: localStorage.getItem(hostTokenKey(code)),
+  });
 }
 
 function connect() {
@@ -119,12 +124,16 @@ function connect() {
       sentMove = null;
       if (room?.game) renderBoard();
       toast(message.message);
+      // A rejected clock setting snaps back to the one the game has.
+      if (room && !room.game) syncClockSettings(true);
       if (!room) {
         history.replaceState(null, '', location.pathname);
         show('home');
       }
     } else if (message.type === 'seat') {
       localStorage.setItem(tokenKey(message.code), message.token);
+    } else if (message.type === 'host') {
+      localStorage.setItem(hostTokenKey(message.code), message.token);
     } else if (message.type === 'room') {
       receiveRoom(message);
     } else if (message.type === 'chatHistory') {
@@ -132,6 +141,8 @@ function connect() {
       message.messages.forEach(addChatMessage);
     } else if (message.type === 'chat') {
       addChatMessage(message.message);
+    } else if (message.type === 'notice') {
+      toast(message.text);
     }
   };
 }
@@ -150,7 +161,12 @@ function receiveRoom(message) {
     viewStep = null;
     positions = [];
   }
+  // After a takeback the game is shorter, so cached positions past its end are stale.
+  const actions = message.game?.history?.length ?? 0;
+  if (positions.length > actions + 1) positions.length = actions + 1;
+  if (viewStep !== null && viewStep >= actions) viewStep = null;
   room = message;
+  clockReceivedAt = performance.now();
   sentMove = null;
   rememberLivePosition();
   const url = new URL(location.href);
@@ -192,12 +208,54 @@ function renderLobby() {
   }
   // Once seated, the name box renames you instead of naming the seat you pick.
   if (room.you && document.activeElement !== $('name')) $('name').value = room.players[room.you].name;
+  const tc = room.timeControl;
+  // Written the standard way, minutes|increment, with an explanation behind the ? button.
+  $('time-control-text').textContent = tc ? `Clock: ${tc.minutes}|${tc.increment}` : 'No clock.';
+  $('time-control-help').hidden = !tc;
+  if (!tc) setTimeControlHelp(false);
+  else {
+    const s = (n) => (n === 1 ? '' : 's');
+    $('time-control-explained').textContent = `${tc.minutes}|${tc.increment} means each player starts with `
+      + `${tc.minutes} minute${s(tc.minutes)}, and gets ${tc.increment} second${s(tc.increment)} back after each move. `
+      + 'Your clock only runs on your turn. Your first move is untimed and earns no extra time.';
+  }
+  $('clock-settings').hidden = !room.isHost;
+  syncClockSettings();
+  const full = COLORS.every((c) => room.players[c]);
+  $('start').hidden = !room.isHost;
+  $('start').disabled = !full;
+  $('start').title = full ? '' : 'Waits for all three seats to be taken';
+  $('start-note').hidden = room.isHost || !full;
   $('name').hidden = watching;
   $('name-label').hidden = watching;
   $('watching-note').hidden = !watching;
   // Once seated you're playing, so there's nothing to switch.
   $('watch').hidden = Boolean(room.you);
   $('watch').textContent = watching ? 'Take a seat instead' : 'Just watch';
+}
+
+// Shows the game's time control in the creator's clock settings. A box being typed in is
+// left alone unless `force`, so updates from the server don't fight the typing.
+function syncClockSettings(force = false) {
+  if (!room?.isHost) return;
+  const tc = room.timeControl;
+  $('use-clock').checked = Boolean(tc);
+  $('clock-options').hidden = !tc;
+  if (!tc) return;
+  for (const [id, value] of [['clock-minutes', tc.minutes], ['clock-increment', tc.increment]]) {
+    if (force || document.activeElement !== $(id)) $(id).value = value;
+  }
+}
+
+function setTimeControlHelp(open) {
+  $('time-control-explained').hidden = !open;
+  $('time-control-help').setAttribute('aria-expanded', String(open));
+}
+
+function chosenTimeControl() {
+  return $('use-clock').checked
+    ? { minutes: Number($('clock-minutes').value), increment: Number($('clock-increment').value) }
+    : null;
 }
 
 function colorLabel(color) {
@@ -566,7 +624,10 @@ function renderLog() {
   $('history-start').disabled = currentStep() === 0;
   $('history-forward').disabled = viewStep === null;
   $('history-latest').disabled = viewStep === null;
-  $('undo').disabled = !solo || !game.history?.length;
+  $('undo').disabled = solo ? !game.history?.length : !room.canTakeBack;
+  const undoLabel = solo ? 'Undo' : 'Ask to take back your move';
+  $('undo').title = undoLabel;
+  $('undo').setAttribute('aria-label', undoLabel);
 }
 
 // ---- Chat ----
@@ -660,9 +721,48 @@ function renderPlayers(game) {
     };
     if (game.status === 'active' && game.alive[color] && isInCheck(game, color)) addTag('check', 'check');
     if (!player.online) addTag('offline', 'tag');
+    if (room.clock) {
+      const clock = document.createElement('span');
+      clock.className = 'clock';
+      clock.dataset.color = color;
+      item.append(clock);
+    }
     list.append(item);
   }
+  renderClocks();
 }
+
+// ---- Clocks ----
+
+const LOW_TIME_MS = 60000;
+
+// 1:05:00, 4:59, and tenths under ten seconds: 0:09.4
+function formatClock(ms) {
+  const tenths = Math.floor(ms / 100);
+  const seconds = Math.floor(tenths / 10);
+  const [h, m, s] = [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60];
+  const pad = (n) => String(n).padStart(2, '0');
+  if (h) return `${h}:${pad(m)}:${pad(s)}`;
+  return ms < 10000 ? `${m}:${pad(s)}.${tenths % 10}` : `${m}:${pad(s)}`;
+}
+
+function renderClocks() {
+  if (!room?.clock) return;
+  const { left, running } = room.clock;
+  const elapsed = performance.now() - clockReceivedAt;
+  for (const element of document.querySelectorAll('#players .clock')) {
+    const { color } = element.dataset;
+    const ms = Math.max(0, left[color] - (color === running ? elapsed : 0));
+    element.textContent = formatClock(ms);
+    element.classList.toggle('running', color === running);
+    element.classList.toggle('low', ms < LOW_TIME_MS && room.game.alive[color]);
+  }
+}
+
+// Only the running clock changes, so this just repaints the numbers.
+setInterval(() => {
+  if (room?.clock?.running && !$('game').hidden) renderClocks();
+}, 100);
 
 // Swaps your name in the player list for a text box. Enter or clicking away saves it,
 // Escape cancels.
@@ -688,7 +788,7 @@ function startRename(item, nameElement, current) {
     if (event.key === 'Escape') finish(false);
   });
   input.addEventListener('blur', () => finish(true));
-  item.replaceChildren(item.firstChild, input);
+  item.replaceChildren(item.firstChild, input, ...item.querySelectorAll('.clock'));
   input.focus();
   input.select();
 }
@@ -698,8 +798,58 @@ function rename(name) {
   send({ type: 'rename', name });
 }
 
+// The takeback request, if there is one, with a row per voter: their colour, then a tick
+// and a cross. Only your own row can be clicked, and everyone sees who has agreed.
+// A no ends the request at once, so a cast vote is always a yes.
+function renderTakeback() {
+  const request = room.takeback;
+  $('takeback').hidden = !request;
+  $('takeback').classList.toggle('attention', Boolean(request?.voters.includes(room.you)
+    && !request.accepted.includes(room.you)));
+  if (!request) return;
+  renderTakebackText();
+  $('takeback-votes').replaceChildren(...request.voters.map((color) => {
+    const name = room.players[color].name;
+    const agreed = request.accepted.includes(color);
+    const canVote = color === room.you && !agreed;
+    const row = document.createElement('div');
+    row.className = 'vote';
+    const swatch = document.createElement('span');
+    swatch.className = `swatch ${color}`;
+    swatch.title = name;
+    swatch.setAttribute('role', 'img');
+    swatch.setAttribute('aria-label', name);
+    const button = (symbol, accept, label) => {
+      const element = document.createElement('button');
+      element.textContent = symbol;
+      element.disabled = !canVote;
+      element.title = canVote ? label : `${name}${agreed ? ' agreed' : ' has not voted yet'}`;
+      element.setAttribute('aria-label', canVote ? label : element.title);
+      if (accept && agreed) element.classList.add('chosen');
+      element.addEventListener('click', () => send({ type: 'answerTakeback', accept }));
+      return element;
+    };
+    row.append(swatch, button('\u2713', true, 'Agree to the takeback'), button('\u2715', false, 'Refuse the takeback'));
+    return row;
+  }));
+}
+
+// The heading, with the seconds left before an unanswered request is declined.
+function renderTakebackText() {
+  const request = room?.takeback;
+  if (!request) return;
+  const seconds = Math.ceil(Math.max(0, request.expiresIn - (performance.now() - clockReceivedAt)) / 1000);
+  const who = request.by === room.you ? 'You' : room.players[request.by].name;
+  $('takeback-text').textContent = `${who} requested a takeback (${seconds}s)`;
+}
+
+setInterval(() => {
+  if (room?.takeback && !$('game').hidden) renderTakebackText();
+}, 250);
+
 function renderGame() {
   show('game');
+  renderTakeback();
   $('chat').hidden = solo;
   $('chat-form').hidden = !room.you;
   renderBoard();
@@ -708,7 +858,20 @@ function renderGame() {
 
 // ---- Wiring ----
 
-$('create').addEventListener('click', () => send({ type: 'create' }));
+$('start').addEventListener('click', () => send({ type: 'start' }));
+$('time-control-help').addEventListener('click', () => {
+  setTimeControlHelp($('time-control-explained').hidden);
+});
+// New games start with the clock settings of the last game you created.
+$('create').addEventListener('click', () => send({ type: 'create', timeControl: chosenTimeControl() }));
+for (const id of ['use-clock', 'clock-minutes', 'clock-increment']) {
+  $(id).addEventListener('change', () => {
+    $('clock-options').hidden = !$('use-clock').checked;
+    const timeControl = chosenTimeControl();
+    localStorage.setItem('tpc-clock', JSON.stringify({ useClock: Boolean(timeControl), ...(timeControl ?? {}) }));
+    send({ type: 'setTimeControl', timeControl });
+  });
+}
 $('solo').addEventListener('click', startSolo);
 $('join-form').addEventListener('submit', (event) => {
   event.preventDefault();
@@ -729,7 +892,10 @@ $('resign').addEventListener('click', () => {
   viewStep = null;
   send({ type: 'resign' });
 });
-$('undo').addEventListener('click', undoSolo);
+$('undo').addEventListener('click', () => {
+  if (solo) undoSolo();
+  else send({ type: 'takeback' });
+});
 $('name').addEventListener('change', () => {
   if (room?.you && $('name').value.trim()) rename($('name').value);
 });
@@ -781,6 +947,16 @@ document.addEventListener('keydown', (event) => {
   goToStep(currentStep() + delta);
 });
 $('name').value = localStorage.getItem('tpc-name') ?? '';
+// The clock settings from the last game you created.
+try {
+  const saved = JSON.parse(localStorage.getItem('tpc-clock'));
+  if (saved) {
+    $('use-clock').checked = saved.useClock;
+    $('clock-options').hidden = !saved.useClock;
+    if (saved.minutes) $('clock-minutes').value = saved.minutes;
+    if (saved.increment !== undefined) $('clock-increment').value = saved.increment;
+  }
+} catch {}
 
 // GitHub Pages has no game server, so that copy of the site is only the analysis board.
 if (location.hostname.endsWith('.github.io') || new URL(location.href).searchParams.has('solo')) startSolo();

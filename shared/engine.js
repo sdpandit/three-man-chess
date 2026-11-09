@@ -394,16 +394,29 @@ export function applyMove(state, { from, to, promotion }) {
   return next;
 }
 
-export function resign(state, color) {
-  if (state.status !== 'active' || !state.alive[color]) throw new Error('Cannot resign');
+// Knocks a player out without a move: resigning, or running out of time.
+function knockOut(state, color, logLine, action) {
   const next = structuredClone(state);
-  next.log.push(`${COLOR_NAMES[color]} resigns`);
+  next.log.push(logLine);
   kill(next, color);
   if (next.turn === color) advanceTurn(next);
-  next.history?.push({ resign: color, logEnd: next.log.length });
+  next.history?.push({ ...action, logEnd: next.log.length });
   return next;
 }
 
+export function resign(state, color) {
+  if (state.status !== 'active' || !state.alive[color]) throw new Error('Cannot resign');
+  return knockOut(state, color, `${COLOR_NAMES[color]} resigns`, { resign: color });
+}
+
+// Only the player on move can run out of time, since only their clock runs.
+export function timeOut(state, color) {
+  if (state.status !== 'active' || state.turn !== color) throw new Error('Cannot time out');
+  return knockOut(state, color, `${COLOR_NAMES[color]} times out`, { timeOut: color });
+}
+
 export function replayAction(state, action) {
-  return action.resign ? resign(state, action.resign) : applyMove(state, action);
+  if (action.resign) return resign(state, action.resign);
+  if (action.timeOut) return timeOut(state, action.timeOut);
+  return applyMove(state, action);
 }

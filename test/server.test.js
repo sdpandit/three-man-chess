@@ -14,7 +14,7 @@ const PORT = 3977;
 
 async function startServer() {
   const child = spawn(process.execPath, ['server/index.js'], {
-    env: { ...process.env, PORT, DATA_FILE: dataFile },
+    env: { ...process.env, PORT, DATA_FILE: dataFile, TAKEBACK_TIMEOUT_MS: '1000' },
     stdio: 'pipe',
   });
   await new Promise((resolve, reject) => {
@@ -80,8 +80,16 @@ test('three clients play a game; the server enforces the rules and survives a re
     assert.match((await g.until((m) => m.type === 'error')).message, /taken/);
     g.send({ type: 'sit', color: 'g', name: '<b>Bo</b>' });
     await g.until((m) => m.type === 'seat');
+    // Only the creator starts the game, and only with every seat taken.
+    w.send({ type: 'start' });
+    assert.match((await w.until((m) => m.type === 'error')).message, /all three seats/);
     b.send({ type: 'sit', color: 'b', name: 'Cy' });
     await b.until((m) => m.type === 'seat');
+    const full = await watcher.until((m) => m.type === 'room' && m.players.b);
+    assert.equal(full.game, null, 'filling the seats does not start the game');
+    g.send({ type: 'start' });
+    assert.match((await g.until((m) => m.type === 'error')).message, /Only whoever created/);
+    w.send({ type: 'start' });
 
     const started = await watcher.until((m) => m.type === 'room' && m.game);
     assert.equal(started.you, null);
@@ -176,6 +184,223 @@ test('three clients play a game; the server enforces the rules and survives a re
     assert.equal(resigned.players.g.name, '<b>Bo</b>');
     back.ws.close();
     stranger.ws.close();
+  } finally {
+    await stopServer(server);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('clocks: players time out on their own turn, after their first move', async () => {
+  const server = await startServer();
+  try {
+    const [w, g, b] = await Promise.all([client(), client(), client()]);
+    w.send({ type: 'create', timeControl: { minutes: 90 / 0 } });
+    assert.match((await w.until((m) => m.type === 'error')).message, /minutes/);
+    w.send({ type: 'create', timeControl: null });
+    const { token: hostToken } = await w.until((m) => m.type === 'host');
+    const lobby = await w.until((m) => m.type === 'room');
+    assert.equal(lobby.timeControl, null);
+    assert.equal(lobby.isHost, true);
+    for (const c of [g, b]) {
+      c.send({ type: 'join', code: lobby.code });
+      assert.equal((await c.until((m) => m.type === 'room')).isHost, false);
+    }
+
+    // Only the creator sets the clock, in the lobby. They keep that after reconnecting.
+    g.send({ type: 'setTimeControl', timeControl: { minutes: 5, increment: 0 } });
+    assert.match((await g.until((m) => m.type === 'error')).message, /Only whoever created/);
+    w.ws.close();
+    const host = await client();
+    host.send({ type: 'join', code: lobby.code, hostToken });
+    assert.equal((await host.until((m) => m.type === 'room')).isHost, true);
+    host.send({ type: 'setTimeControl', timeControl: { minutes: 0, increment: 0 } });
+    assert.match((await host.until((m) => m.type === 'error')).message, /minutes/);
+    // 0.01 minutes is 600 ms each, with no increment.
+    host.send({ type: 'setTimeControl', timeControl: { minutes: 0.01, increment: 0 } });
+    const set = await g.until((m) => m.type === 'room' && m.timeControl);
+    assert.deepEqual(set.timeControl, { minutes: 0.01, increment: 0 });
+
+    for (const [c, color] of [[g, 'g'], [b, 'b'], [host, 'w']]) {
+      c.send({ type: 'sit', color });
+      await c.until((m) => m.type === 'seat');
+    }
+    host.send({ type: 'start' });
+    const started = await host.until((m) => m.type === 'room' && m.game);
+    host.send({ type: 'start' });
+    assert.match((await host.until((m) => m.type === 'error')).message, /already started/);
+    assert.deepEqual(started.clock, { left: { w: 600, g: 600, b: 600 }, running: null });
+    host.send({ type: 'setTimeControl', timeControl: null });
+    assert.match((await host.until((m) => m.type === 'error')).message, /already started/);
+
+    // First moves are free, so taking longer than the whole clock is fine.
+    await sleep(700);
+    host.send({ type: 'move', from: sq(1, 0), to: sq(2, 0) });
+    await g.until((m) => m.type === 'room' && m.game?.turn === 'g');
+    g.send({ type: 'move', from: sq(1, 8), to: sq(2, 8) });
+    await b.until((m) => m.type === 'room' && m.game?.turn === 'b');
+    b.send({ type: 'move', from: sq(1, 16), to: sq(2, 16) });
+    const timed = await host.until((m) => m.type === 'room' && m.game?.turn === 'w');
+    assert.equal(timed.clock.running, 'w');
+
+    // White's second move is timed. Nobody moves, so white and then gray run out.
+    const whiteOut = await b.until((m) => m.type === 'room' && m.game && !m.game.alive.w);
+    assert.equal(whiteOut.game.log.at(-1), 'White times out');
+    assert.equal(whiteOut.clock.left.w, 0);
+    assert.equal(whiteOut.clock.running, 'g');
+    const over = await b.until((m) => m.type === 'room' && m.game?.status === 'won');
+    assert.equal(over.game.winner, 'b');
+    assert.equal(over.clock.running, null);
+    assert.deepEqual(over.game.history.slice(-2).map((a) => a.timeOut), ['w', 'g']);
+    for (const c of [host, g, b]) c.ws.close();
+  } finally {
+    await stopServer(server);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('takebacks: ask once, everyone else agrees, and the next move declines it', async () => {
+  const server = await startServer();
+  try {
+    const [w, g, b, watcher] = await Promise.all([client(), client(), client(), client()]);
+    const everyone = [w, g, b, watcher];
+    w.send({ type: 'create', timeControl: { minutes: 1, increment: 5 } });
+    const { code } = await w.until((m) => m.type === 'room');
+    for (const c of [g, b, watcher]) {
+      c.send({ type: 'join', code });
+      await c.until((m) => m.type === 'room');
+    }
+    for (const [c, color] of [[w, 'w'], [g, 'g'], [b, 'b']]) {
+      c.send({ type: 'sit', color });
+      await c.until((m) => m.type === 'seat');
+    }
+    w.send({ type: 'start' });
+    const latest = (c, check = () => true) => c.until((m) => m.type === 'room' && m.game && check(m));
+    const move = async (c, from, to) => {
+      c.send({ type: 'move', from, to });
+      return latest(watcher, (m) => m.game.board[to]);
+    };
+    const notice = (c, text) => c.until((m) => m.type === 'notice' && text.test(m.text));
+
+    // Only the player who just moved can ask, and only once.
+    await move(w, sq(1, 0), sq(2, 0));
+    assert.equal((await latest(w, (m) => m.game.board[sq(2, 0)])).canTakeBack, true);
+    g.send({ type: 'takeback' });
+    assert.match((await g.until((m) => m.type === 'error')).message, /only ask once/);
+    w.send({ type: 'takeback' });
+    const asked = await latest(watcher, (m) => m.takeback);
+    const { expiresIn, ...request } = asked.takeback;
+    assert.deepEqual(request, { by: 'w', voters: ['g', 'b'], accepted: [] });
+    assert.ok(expiresIn > 0);
+    w.send({ type: 'takeback' });
+    assert.match((await w.until((m) => m.type === 'error')).message, /only ask once/);
+    w.send({ type: 'answerTakeback', accept: true });
+    assert.match((await w.until((m) => m.type === 'error')).message, /nothing for you/);
+    watcher.send({ type: 'answerTakeback', accept: true });
+    assert.match((await watcher.until((m) => m.type === 'error')).message, /nothing for you/);
+
+    // One yes and one no is a no, and the move stands.
+    g.send({ type: 'answerTakeback', accept: true });
+    assert.deepEqual((await latest(watcher, (m) => m.takeback?.accepted.length)).takeback.accepted, ['g']);
+    b.send({ type: 'answerTakeback', accept: false });
+    for (const c of everyone) await notice(c, /declined the takeback/);
+    const declined = await latest(w, (m) => !m.takeback);
+    assert.equal(declined.canTakeBack, false, 'no second request for the same move');
+    assert.equal(declined.game.turn, 'g');
+
+    // The next move declines a pending request.
+    await move(g, sq(1, 8), sq(2, 8));
+    g.send({ type: 'takeback' });
+    await latest(watcher, (m) => m.takeback?.by === 'g');
+    w.send({ type: 'answerTakeback', accept: true });
+    await latest(watcher, (m) => m.takeback?.accepted.length === 1);
+    b.send({ type: 'move', from: sq(1, 16), to: sq(2, 16) });
+    for (const c of everyone) await notice(c, /moved on/);
+    assert.equal((await latest(g, (m) => m.game.turn === 'w')).takeback, null);
+
+    // White's second move is timed. Taking it back returns the time to when it was made,
+    // without the increment, and white's clock runs again.
+    const before = await latest(watcher, (m) => m.game.turn === 'w');
+    // White's clock is already running, so a few milliseconds may have gone.
+    assert.ok(before.clock.left.w > 59900 && before.clock.left.w <= 60000, 'the first move earned no increment');
+    await sleep(300);
+    const moved = await move(w, sq(1, 1), sq(2, 1));
+    assert.ok(moved.clock.left.w > 60000, 'the second move earned the increment');
+    w.send({ type: 'takeback' });
+    g.send({ type: 'answerTakeback', accept: true });
+    await latest(watcher, (m) => m.takeback?.accepted.length === 1);
+    b.send({ type: 'answerTakeback', accept: true });
+    for (const c of everyone) await notice(c, /move was taken back/);
+    const undone = await latest(watcher, (m) => !m.game.board[sq(2, 1)]);
+    assert.equal(undone.game.turn, 'w');
+    assert.equal(undone.game.history.length, before.game.history.length);
+    assert.deepEqual(undone.game.log, before.game.log);
+    assert.equal(undone.clock.running, 'w');
+    assert.ok(undone.clock.left.w < 60000 - 250 && undone.clock.left.w > 60000 - 1000, `white has ${undone.clock.left.w}`);
+    assert.equal(undone.clock.left.g, 60000, 'gray gets back the time that ran during the request');
+    assert.equal(undone.takeback, null);
+    assert.equal((await latest(w, (m) => !m.game.board[sq(2, 1)])).canTakeBack, false);
+    for (const c of everyone) c.ws.close();
+  } finally {
+    await stopServer(server);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('takebacks: the player on move pauses their clock by agreeing, and requests time out', async () => {
+  const server = await startServer();
+  try {
+    const [w, g, b] = await Promise.all([client(), client(), client()]);
+    w.send({ type: 'create', timeControl: { minutes: 1, increment: 0 } });
+    const { code } = await w.until((m) => m.type === 'room');
+    for (const c of [g, b]) {
+      c.send({ type: 'join', code });
+      await c.until((m) => m.type === 'room');
+    }
+    for (const [c, color] of [[w, 'w'], [g, 'g'], [b, 'b']]) {
+      c.send({ type: 'sit', color });
+      await c.until((m) => m.type === 'seat');
+    }
+    w.send({ type: 'start' });
+    const latest = (c, check) => c.until((m) => m.type === 'room' && m.game && check(m));
+    // First moves for everyone, then white's timed second move.
+    for (const [c, from, to, next] of [[w, sq(1, 0), sq(2, 0), 'g'], [g, sq(1, 8), sq(2, 8), 'b'],
+      [b, sq(1, 16), sq(2, 16), 'w'], [w, sq(1, 1), sq(2, 1), 'g']]) {
+      c.send({ type: 'move', from, to });
+      await latest(b, (m) => m.game.turn === next && m.game.board[to]);
+    }
+
+    // Gray is on move and agrees, so gray's clock stops while black decides.
+    w.send({ type: 'takeback' });
+    const asked = await latest(b, (m) => m.takeback);
+    assert.ok(asked.takeback.expiresIn > 900 && asked.takeback.expiresIn <= 1000);
+    assert.equal(asked.clock.running, 'g');
+    g.send({ type: 'answerTakeback', accept: true });
+    const paused = await latest(b, (m) => m.takeback?.accepted.length === 1);
+    assert.equal(paused.clock.running, null);
+
+    // Black never answers, so the request runs out, and gray's clock carries on from where it stopped.
+    await sleep(400);
+    for (const c of [w, g, b]) await c.until((m) => m.type === 'notice' && /in time/.test(m.text));
+    const expired = await latest(b, (m) => !m.takeback);
+    assert.equal(expired.clock.running, 'g');
+    assert.ok(paused.clock.left.g - expired.clock.left.g < 100, 'no time was charged during the pause');
+    assert.equal(expired.game.turn, 'g', 'the move stands');
+
+    // A no also restarts the clock of the player on move who had agreed.
+    g.send({ type: 'move', from: sq(1, 9), to: sq(2, 9) });
+    await latest(b, (m) => m.game.turn === 'b' && m.game.board[sq(2, 9)]);
+    g.send({ type: 'takeback' });
+    await latest(w, (m) => m.takeback);
+    b.send({ type: 'answerTakeback', accept: true });
+    const blackPaused = await latest(w, (m) => m.takeback?.accepted.length === 1);
+    assert.equal(blackPaused.clock.running, null);
+    await sleep(300);
+    w.send({ type: 'answerTakeback', accept: false });
+    await b.until((m) => m.type === 'notice' && /declined/.test(m.text));
+    const resumed = await latest(w, (m) => !m.takeback);
+    assert.equal(resumed.clock.running, 'b');
+    assert.ok(blackPaused.clock.left.b - resumed.clock.left.b < 100, 'no time was charged during the pause');
+    for (const c of [w, g, b]) c.ws.close();
   } finally {
     await stopServer(server);
     rmSync(dir, { recursive: true, force: true });
