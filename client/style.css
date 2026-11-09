@@ -344,6 +344,8 @@ aside {
   #game:has(#takeback:not([hidden])) { padding-bottom: 120px; }
   #board-wrap { order: 4; flex: none; }
   #history-nav { order: 5; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+  /* The analysis board has no chat, so its six buttons share the row. */
+  #history-nav:has(#chat-toggle[hidden]) { grid-template-columns: repeat(6, 1fr); }
   #leave-game { order: 6; }
   #chat { order: 7; }
   #log { display: none; }
