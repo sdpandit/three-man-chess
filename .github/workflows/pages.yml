@@ -1,0 +1,56 @@
+# Publishes the analysis board to GitHub Pages whenever main changes.
+# Pages serves the gh-pages branch, which holds a flat copy of the browser files. There is no
+# game server on Pages, so the page opens straight to the analysis board there.
+name: Publish to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# One publish at a time, so two quick pushes can't race on gh-pages.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Test
+        run: |
+          npm ci
+          npm test
+
+      - name: Build the site
+        run: |
+          mkdir site
+          cp client/index.html client/client.js client/style.css shared/engine.js site/
+          touch site/.nojekyll
+
+      - name: Publish to gh-pages
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin gh-pages
+          git worktree add -B gh-pages pages origin/gh-pages
+          # Replace the branch's files with the fresh build, so removed files go too.
+          find pages -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -r site/. pages/
+          cd pages
+          git add -A
+          if git diff --cached --quiet; then
+            echo "The site is already up to date."
+            exit 0
+          fi
+          git commit -m "Publish ${GITHUB_SHA::7}: $(git -C .. log -1 --format=%s)"
+          git push origin gh-pages

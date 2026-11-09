@@ -40,6 +40,9 @@ let watchingCode = null;
 let editingName = false;
 // Phones show chat only when opened from the button row, so new messages light a dot there.
 const phoneLayout = matchMedia('(max-width: 800px)');
+// GitHub Pages has no game server, so that copy of the site is only the analysis board,
+// as is any page opened with ?solo.
+const boardOnly = location.hostname.endsWith('.github.io') || new URL(location.href).searchParams.has('solo');
 // Which game the end-of-game pop-up has been shown for, so it only appears once.
 let resultShownFor = null;
 // When the latest clock times arrived, by performance.now(), to count down from.
@@ -880,6 +883,11 @@ function showResultOnce() {
 // Back to the home screen, to create or join another game.
 function returnToLobby() {
   if ($('result').open) $('result').close();
+  // Without a game server there is no lobby to go to, just a fresh board.
+  if (boardOnly) {
+    startSolo();
+    return;
+  }
   if (!solo) send({ type: 'leave' });
   solo = false;
   room = null;
@@ -1034,6 +1042,9 @@ try {
   }
 } catch {}
 
-// GitHub Pages has no game server, so that copy of the site is only the analysis board.
-if (location.hostname.endsWith('.github.io') || new URL(location.href).searchParams.has('solo')) startSolo();
-else connect();
+if (boardOnly) {
+  for (const id of ['to-lobby', 'leave-game']) $(id).textContent = 'New board';
+  startSolo();
+} else {
+  connect();
+}
