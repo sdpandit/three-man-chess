@@ -38,6 +38,10 @@ let sentMove = null;
 let watchingCode = null;
 // True while you're typing a new name in the player list, so updates don't wipe it out.
 let editingName = false;
+// Phones show chat only when opened from the button row, so new messages light a dot there.
+const phoneLayout = matchMedia('(max-width: 800px)');
+// Which game the end-of-game pop-up has been shown for, so it only appears once.
+let resultShownFor = null;
 // When the latest clock times arrived, by performance.now(), to count down from.
 let clockReceivedAt = 0;
 const DRAG_THRESHOLD_PX = 6;
@@ -48,6 +52,7 @@ const roomCodeFromUrl = () => new URL(location.href).searchParams.get('room')?.t
 
 function startSolo() {
   solo = true;
+  resultShownFor = null;
   const players = Object.fromEntries(COLORS.map((color, i) => [color, { name: `Player ${i + 1}`, online: true }]));
   room = { code: null, you: 'w', players, game: createGame() };
   viewStep = null;
@@ -141,6 +146,7 @@ function connect() {
       message.messages.forEach(addChatMessage);
     } else if (message.type === 'chat') {
       addChatMessage(message.message);
+      if (phoneLayout.matches && !$('game').classList.contains('chat-open')) markChatUnread();
     } else if (message.type === 'notice') {
       toast(message.text);
     }
@@ -847,18 +853,88 @@ setInterval(() => {
   if (room?.takeback && !$('game').hidden) renderTakebackText();
 }, 250);
 
+// ---- End of game ----
+
+// Pops up the result once when a game ends, or when you open one that already has.
+// A takeback of the winning move reopens the game, so it can pop up again later.
+function showResultOnce() {
+  const game = room.game;
+  const key = solo ? 'solo' : room.code;
+  $('leave-game').hidden = game.status === 'active';
+  if (game.status === 'active') {
+    if (resultShownFor === key) resultShownFor = null;
+    if ($('result').open) $('result').close();
+    return;
+  }
+  if (resultShownFor === key) return;
+  resultShownFor = key;
+  const winner = game.winner;
+  $('result-title').textContent = game.status === 'draw' ? 'Draw'
+    : winner === room.you && !solo ? 'You win!'
+      : `${room.players[winner].name} wins!`;
+  // The last log line says how it ended: "Gray is checkmated", "Black times out", ...
+  $('result-detail').textContent = `${game.log.at(-1)}.`;
+  $('result').showModal();
+}
+
+// Back to the home screen, to create or join another game.
+function returnToLobby() {
+  if ($('result').open) $('result').close();
+  if (!solo) send({ type: 'leave' });
+  solo = false;
+  room = null;
+  viewStep = null;
+  positions = [];
+  selected = null;
+  pendingPromotion = null;
+  resultShownFor = null;
+  $('chat-messages').replaceChildren();
+  setChatOpen(false);
+  history.replaceState(null, '', location.pathname);
+  show('home');
+}
+
+// Lights up the closed chat's button: three quick flashes for each new message, then a
+// steady glow and a dot until the chat is opened.
+function markChatUnread() {
+  const button = $('chat-toggle');
+  $('chat-dot').hidden = false;
+  button.classList.add('unread');
+  // Restart the flashing if it is still going from an earlier message.
+  button.classList.remove('flash');
+  void button.offsetWidth;
+  button.classList.add('flash');
+}
+
+function setChatOpen(open) {
+  $('game').classList.toggle('chat-open', open);
+  $('chat-toggle').setAttribute('aria-expanded', String(open));
+  if (!open) return;
+  $('chat-dot').hidden = true;
+  $('chat-toggle').classList.remove('unread', 'flash');
+  const list = $('chat-messages');
+  list.scrollTop = list.scrollHeight;
+  $('chat').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
 function renderGame() {
   show('game');
   renderTakeback();
   $('chat').hidden = solo;
+  $('chat-toggle').hidden = solo;
   $('chat-form').hidden = !room.you;
   renderBoard();
   renderPanel();
+  showResultOnce();
 }
 
 // ---- Wiring ----
 
 $('start').addEventListener('click', () => send({ type: 'start' }));
+$('chat-toggle').addEventListener('click', () => setChatOpen(!$('game').classList.contains('chat-open')));
+$('review').addEventListener('click', () => $('result').close());
+$('to-lobby').addEventListener('click', returnToLobby);
+$('leave-game').addEventListener('click', returnToLobby);
 $('time-control-help').addEventListener('click', () => {
   setTimeControlHelp($('time-control-explained').hidden);
 });

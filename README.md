@@ -33,8 +33,12 @@ is declined, and if the player on move agrees, their clock waits while the other
 
 Whoever creates an online game can give it a clock from the waiting room, until the game
 starts: minutes each, plus seconds added after every move. A player's clock only runs on
-their turn, and not during their first move, which earns no increment. Running out of time knocks you out like
-resigning. Clocks pause while the server is down.
+their turn, and not during their first move, which earns no increment. Running out of
+time knocks you out like resigning. Clocks pause while the server is down.
+
+When a game ends, everyone gets a pop-up with the result. "Review game" stays on the board
+to step through the moves, and "Return to lobby", there or in the side panel, goes back to
+create or join another game.
 
 Online games also have a chat. Players can write in it, and anyone with the game link can read it.
 Players can rename themselves at any time with the ✎ next to their name, and their past

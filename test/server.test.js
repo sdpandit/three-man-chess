@@ -251,6 +251,11 @@ test('clocks: players time out on their own turn, after their first move', async
     assert.equal(over.game.winner, 'b');
     assert.equal(over.clock.running, null);
     assert.deepEqual(over.game.history.slice(-2).map((a) => a.timeOut), ['w', 'g']);
+
+    // Returning to the lobby leaves the game: the seat stays, shown as offline.
+    host.send({ type: 'leave' });
+    const left = await b.until((m) => m.type === 'room' && m.players.w.online === false);
+    assert.equal(left.players.w.name, 'Player');
     for (const c of [host, g, b]) c.ws.close();
   } finally {
     await stopServer(server);

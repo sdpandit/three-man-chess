@@ -422,6 +422,12 @@ const handlers = {
     broadcast(room);
   },
 
+  // Leaving for the home screen: the seat stays yours, but you show as offline.
+  leave(socket) {
+    socket.hostOf = null;
+    detach(socket);
+  },
+
   resign(socket) {
     const room = socket.room;
     const color = room && sockets.get(room.code).get(socket);

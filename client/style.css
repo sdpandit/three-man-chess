@@ -123,6 +123,23 @@ aside {
 #status.yours { background: var(--accent); color: #2b211a; }
 #status.viewing { background: #35566e; }
 
+#leave-game { background: var(--raised); }
+
+#result {
+  width: min(360px, calc(100vw - 32px));
+  padding: 24px;
+  color: var(--text);
+  text-align: center;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+}
+#result::backdrop { background: rgba(0, 0, 0, .55); }
+#result h2 { margin: 0 0 8px; font-size: 24px; }
+#result p { margin: 0 0 18px; color: var(--muted); }
+#result .row button { flex: 1; }
+#result button:not(.primary) { background: var(--raised); }
+
 #takeback {
   display: flex;
   flex-direction: column;
@@ -215,6 +232,25 @@ aside {
 #history-nav button { letter-spacing: -2px; }
 #resign { background: #8c3a2e; }
 #history-nav svg { display: block; width: 18px; height: 18px; margin: auto; fill: currentColor; }
+/* Phones only: there, chat opens and closes from the button row. */
+#chat-toggle { display: none; position: relative; }
+#chat-toggle.unread { box-shadow: 0 0 10px 2px rgba(217, 164, 65, .65); }
+#chat-toggle.flash { animation: chat-flash .5s ease-in-out 3; }
+@keyframes chat-flash {
+  50% { color: #2b211a; background: var(--accent); box-shadow: 0 0 16px 5px rgba(217, 164, 65, .85); }
+}
+@media (prefers-reduced-motion: reduce) {
+  #chat-toggle.flash { animation: none; }
+}
+#chat-dot {
+  position: absolute;
+  top: 5px;
+  right: calc(50% - 15px);
+  width: 9px;
+  height: 9px;
+  background: var(--accent);
+  border-radius: 50%;
+}
 
 #chat { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
 #chat-messages {
@@ -243,6 +279,7 @@ aside {
   padding: 10px 16px;
   background: #8c2f25;
   border-radius: 8px;
+  z-index: 30;
 }
 
 /* Board */
@@ -282,11 +319,46 @@ aside {
 .promotion-choice:hover circle { fill: #e8d9bf; }
 .promotion-choice:focus-visible circle { stroke: #fff; stroke-width: 5; }
 
+/* Phones: players and clocks above the board, one row of buttons below it, and chat behind
+   a button. The side panel's parts join the page's column so they can sit either side of the
+   board. The move list is left out to save room. */
 @media (max-width: 800px) {
-  #game { flex-direction: column; align-items: stretch; padding: 8px; }
-  #board-wrap { flex: none; }
-  aside { flex: none; max-height: none; }
-  #log { flex: none; height: 140px; }
+  #game { flex-direction: column; align-items: stretch; gap: 8px; padding: 8px; }
+  aside { display: contents; }
+  #status { order: 1; padding: 7px 12px; }
+  #players { order: 2; padding: 2px 12px; }
+  #players li { padding: 3px 0; }
+  /* Floats over the bottom of the screen, so a request never moves the board, and stays in
+     view however far down the page you are. */
+  #takeback {
+    position: fixed;
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    z-index: 20;
+    gap: 6px;
+    padding: 10px 12px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, .55);
+  }
+  /* Room to scroll the chat box clear of the floating request. */
+  #game:has(#takeback:not([hidden])) { padding-bottom: 120px; }
+  #board-wrap { order: 4; flex: none; }
+  #history-nav { order: 5; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+  #leave-game { order: 6; }
+  #chat { order: 7; }
+  #log { display: none; }
+  #game:not(.chat-open) #chat { display: none; }
   #chat-messages { flex: none; height: 190px; }
+  #chat-toggle { display: block; }
+  #game.chat-open #chat-toggle { color: #2b211a; background: var(--accent); }
+  /* In reading order: to the start, back, forward, to the latest, then the actions. */
+  #history-start { order: 1; }
+  #history-back { order: 2; }
+  #history-forward { order: 3; }
+  #history-latest { order: 4; }
+  #undo { order: 5; }
+  #resign { order: 6; }
+  #chat-toggle { order: 7; }
+  #history-nav button { padding: 8px 0; }
   .card { margin: 16px; }
 }
