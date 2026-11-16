@@ -149,7 +149,10 @@ function connect() {
       message.messages.forEach(addChatMessage);
     } else if (message.type === 'chat') {
       addChatMessage(message.message);
-      if (phoneLayout.matches && !$('game').classList.contains('chat-open')) markChatUnread();
+      if (phoneLayout.matches && !$('game').classList.contains('chat-open')) {
+        markChatUnread();
+        if (message.message.color !== room?.you) showChatPreview(message.message);
+      }
     } else if (message.type === 'notice') {
       toast(message.text);
     }
@@ -158,6 +161,16 @@ function connect() {
 
 function show(view) {
   for (const id of ['home', 'lobby', 'game']) $(id).hidden = id !== view;
+  updateTitle();
+}
+
+const PAGE_TITLE = document.title;
+
+// Marks the browser tab while it's your move in the live game, so you can see it from
+// another tab. Looking back through earlier moves doesn't hide it: it's still your move.
+function updateTitle() {
+  const yourMove = !solo && !$('game').hidden && room?.game?.status === 'active' && room.game.turn === room.you;
+  document.title = yourMove ? `● Your move · ${PAGE_TITLE}` : PAGE_TITLE;
 }
 
 function receiveRoom(message) {
@@ -231,6 +244,7 @@ function renderLobby() {
   $('clock-settings').hidden = !room.isHost;
   syncClockSettings();
   const full = COLORS.every((c) => room.players[c]);
+  $('lobby-title').textContent = full ? 'Ready to start' : 'Waiting for players';
   $('start').hidden = !room.isHost;
   $('start').disabled = !full;
   $('start').title = full ? '' : 'Waits for all three seats to be taken';
@@ -283,8 +297,11 @@ function svgEl(name, attrs = {}) {
   return el;
 }
 
+// Whose side of the board a spectator watches from. They can turn it to each player's.
+let spectatorView = 'w';
+
 // In solo mode the view stays put rather than spinning every turn.
-const viewOffset = () => SECTOR_MIDDLE[solo ? 'w' : room.you ?? 'w'];
+const viewOffset = () => SECTOR_MIDDLE[solo ? 'w' : room.you ?? spectatorView];
 // Each player sees their own sector at the bottom of the board.
 function fileAngle(file) {
   return ((file - viewOffset()) / FILES) * 2 * Math.PI + Math.PI / 2;
@@ -593,6 +610,15 @@ function fillLogLine(element, line) {
   element.append(square, line.slice(COLOR_NAMES[color].length + 2));
 }
 
+// Keeps the move being viewed in the middle of the move list, or the newest move in view.
+function scrollLogToCurrent() {
+  const log = $('log');
+  const current = log.querySelector('.current');
+  log.scrollTop = viewStep === null || !current
+    ? log.scrollHeight
+    : current.offsetTop - log.clientHeight / 2;
+}
+
 function renderLog() {
   const game = room.game;
   const moves = game.history ?? [];
@@ -624,15 +650,20 @@ function renderLog() {
     entry.append(button);
     return entry;
   }));
-  const current = log.querySelector('.current');
-  log.scrollTop = viewStep === null || !current
-    ? log.scrollHeight
-    : current.offsetTop - log.clientHeight / 2;
+  scrollLogToCurrent();
 
   $('history-back').disabled = currentStep() === 0;
   $('history-start').disabled = currentStep() === 0;
   $('history-forward').disabled = viewStep === null;
   $('history-latest').disabled = viewStep === null;
+  // Spectators can't take moves back, but they can choose whose side to watch from.
+  const spectating = !solo && !room.you;
+  $('undo').hidden = spectating;
+  $('rotate').hidden = !spectating;
+  const nextView = COLORS[(COLORS.indexOf(spectatorView) + 1) % COLORS.length];
+  const rotateLabel = `Watch from ${room.players[nextView]?.name ?? COLOR_NAMES[nextView]}'s side`;
+  $('rotate').title = rotateLabel;
+  $('rotate').setAttribute('aria-label', rotateLabel);
   $('undo').disabled = solo ? !game.history?.length : !room.canTakeBack;
   const undoLabel = solo ? 'Undo' : 'Ask to take back your move';
   $('undo').title = undoLabel;
@@ -692,6 +723,7 @@ function renderPanel() {
   const game = shownGame();
   $('status').replaceChildren(...statusParts());
   $('status').className = viewStep !== null ? 'viewing' : isMyTurn() ? 'yours' : '';
+  updateTitle();
 
   if (!editingName) renderPlayers(game);
   renderLog();
@@ -882,6 +914,7 @@ function showResultOnce() {
 
 // Back to the home screen, to create or join another game.
 function returnToLobby() {
+  spectatorView = 'w';
   if ($('result').open) $('result').close();
   // Without a game server there is no lobby to go to, just a fresh board.
   if (boardOnly) {
@@ -898,31 +931,57 @@ function returnToLobby() {
   resultShownFor = null;
   $('chat-messages').replaceChildren();
   setChatOpen(false);
+  setMovesOpen(false);
   history.replaceState(null, '', location.pathname);
   show('home');
 }
 
-// Lights up the closed chat's button: three quick flashes for each new message, then a
-// steady glow and a dot until the chat is opened.
+// Marks the closed chat's button with a steady glow and a dot until the chat is opened.
 function markChatUnread() {
-  const button = $('chat-toggle');
   $('chat-dot').hidden = false;
-  button.classList.add('unread');
-  // Restart the flashing if it is still going from an earlier message.
-  button.classList.remove('flash');
-  void button.offsetWidth;
-  button.classList.add('flash');
+  $('chat-toggle').classList.add('unread');
 }
 
+let chatPreviewTimer = null;
+
+// The start of a new message in a bubble over the chat button, for a few seconds. CSS cuts
+// a long one off with an ellipsis.
+function showChatPreview({ name, text }) {
+  $('chat-preview-name').textContent = `${name}:`;
+  $('chat-preview-text').textContent = text;
+  $('chat-preview').classList.add('show');
+  clearTimeout(chatPreviewTimer);
+  chatPreviewTimer = setTimeout(hideChatPreview, 4000);
+}
+
+function hideChatPreview() {
+  clearTimeout(chatPreviewTimer);
+  $('chat-preview').classList.remove('show');
+}
+
+// On phones the chat and the move list share the space below the board, so opening one
+// closes the other.
 function setChatOpen(open) {
+  hideChatPreview();
+  if (open) setMovesOpen(false);
   $('game').classList.toggle('chat-open', open);
   $('chat-toggle').setAttribute('aria-expanded', String(open));
   if (!open) return;
   $('chat-dot').hidden = true;
-  $('chat-toggle').classList.remove('unread', 'flash');
+  $('chat-toggle').classList.remove('unread');
   const list = $('chat-messages');
   list.scrollTop = list.scrollHeight;
   $('chat').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+function setMovesOpen(open) {
+  if (open) setChatOpen(false);
+  $('game').classList.toggle('moves-open', open);
+  $('moves-toggle').setAttribute('aria-expanded', String(open));
+  if (!open) return;
+  // The list was hidden, so it couldn't be scrolled while moves came in.
+  scrollLogToCurrent();
+  $('log').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
 function renderGame() {
@@ -940,6 +999,8 @@ function renderGame() {
 
 $('start').addEventListener('click', () => send({ type: 'start' }));
 $('chat-toggle').addEventListener('click', () => setChatOpen(!$('game').classList.contains('chat-open')));
+$('chat-preview').addEventListener('click', () => setChatOpen(true));
+$('moves-toggle').addEventListener('click', () => setMovesOpen(!$('game').classList.contains('moves-open')));
 $('review').addEventListener('click', () => $('result').close());
 $('to-lobby').addEventListener('click', returnToLobby);
 $('leave-game').addEventListener('click', returnToLobby);
@@ -975,6 +1036,12 @@ $('resign').addEventListener('click', () => {
   if (!confirm('Resign? Your pieces stay on the board as corpses.')) return;
   viewStep = null;
   send({ type: 'resign' });
+});
+// Turns the board a third of the way round, to the next player's side.
+$('rotate').addEventListener('click', () => {
+  spectatorView = COLORS[(COLORS.indexOf(spectatorView) + 1) % COLORS.length];
+  renderBoard();
+  renderPanel();
 });
 $('undo').addEventListener('click', () => {
   if (solo) undoSolo();
