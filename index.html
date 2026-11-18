@@ -62,37 +62,62 @@
     <aside>
       <p id="status" role="status"></p>
       <button id="leave-game" hidden>Return to lobby</button>
-      <div id="takeback" role="alert" hidden>
-        <span id="takeback-text"></span>
-        <div id="takeback-votes"></div>
-      </div>
       <ul id="players"></ul>
-      <ol id="log"></ol>
       <div id="history-nav">
         <button id="history-back" aria-label="Previous move" title="Previous move">&#9664;</button>
         <button id="history-forward" aria-label="Next move" title="Next move">&#9654;</button>
-        <button id="undo" aria-label="Undo" title="Undo">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/></svg>
-        </button>
-        <button id="rotate" aria-label="Turn the board" title="Turn the board" hidden>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.55 5.55L11 1v3.07C7.06 4.56 4 7.92 4 12s3.05 7.44 7 7.93v-2.02c-2.84-.48-5-2.94-5-5.91s2.16-5.43 5-5.91V10l4.55-4.45zM19.93 11c-.17-1.39-.72-2.73-1.62-3.89l-1.42 1.42c.54.75.88 1.6 1.02 2.47h2.02zM13 17.9v2.02c1.39-.17 2.74-.71 3.9-1.61l-1.44-1.44c-.75.54-1.59.89-2.46 1.03zm3.89-2.42l1.42 1.41c.9-1.16 1.45-2.5 1.62-3.89h-2.02c-.14.87-.48 1.72-1.02 2.48z"/></svg>
-        </button>
-        <button id="history-start" aria-label="Back to start" title="Back to start">&#9664;&#9664;</button>
-        <button id="history-latest" aria-label="Latest move" title="Latest move">&#9654;&#9654;</button>
         <button id="resign" aria-label="Resign" title="Resign">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.4 6L14 4H5v17h2v-7h5.6l.4 2h7V6z"/></svg>
         </button>
+        <button id="history-start" aria-label="Back to start" title="Back to start">&#9664;&#9664;</button>
+        <button id="history-latest" aria-label="Latest move" title="Latest move">&#9654;&#9654;</button>
+        <div id="menu-wrap">
+          <button id="menu-toggle" aria-label="More options" title="More options" aria-haspopup="menu" aria-expanded="false" aria-controls="game-menu">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm6 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/></svg>
+            <span id="menu-dot"></span>
+          </button>
+          <div id="game-menu" role="menu" hidden>
+            <button id="menu-takeback" role="menuitem">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/></svg>
+              <span id="menu-takeback-text">Request takeback</span>
+            </button>
+            <button id="menu-rotate" role="menuitem">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.55 5.55L11 1v3.07C7.06 4.56 4 7.92 4 12s3.05 7.44 7 7.93v-2.02c-2.84-.48-5-2.94-5-5.91s2.16-5.43 5-5.91V10l4.55-4.45zM19.93 11c-.17-1.39-.72-2.73-1.62-3.89l-1.42 1.42c.54.75.88 1.6 1.02 2.47h2.02zM13 17.9v2.02c1.39-.17 2.74-.71 3.9-1.61l-1.44-1.44c-.75.54-1.59.89-2.46 1.03zm3.89-2.42l1.42 1.41c.9-1.16 1.45-2.5 1.62-3.89h-2.02c-.14.87-.48 1.72-1.02 2.48z"/></svg>
+              Rotate board
+            </button>
+            <button id="menu-moves" role="menuitem">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h2v2H3zm4 0h14v2H7zM3 11h2v2H3zm4 0h14v2H7zm-4 6h2v2H3zm4 0h14v2H7z"/></svg>
+              <span id="menu-moves-text">Hide moves</span>
+            </button>
+            <button id="menu-chat" role="menuitem">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 4v-4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/></svg>
+              <span id="menu-chat-text">Hide chat</span>
+              <span id="menu-chat-dot"></span>
+            </button>
+          </div>
+        </div>
         <button id="moves-toggle" aria-label="Moves" title="Moves" aria-expanded="false" aria-controls="log">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h2v2H3zm4 0h14v2H7zM3 11h2v2H3zm4 0h14v2H7zm-4 6h2v2H3zm4 0h14v2H7z"/></svg>
         </button>
         <button id="chat-toggle" aria-label="Chat" title="Chat" aria-expanded="false" aria-controls="chat">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 4v-4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/></svg>
-          <span id="chat-dot" hidden></span>
+          <span id="chat-dot"></span>
+        </button>
+        <button id="undo-solo" aria-label="Undo move" title="Undo move (as many as you like)" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/></svg>
+        </button>
+        <button id="rotate-solo" aria-label="Rotate board" title="Rotate board" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.55 5.55L11 1v3.07C7.06 4.56 4 7.92 4 12s3.05 7.44 7 7.93v-2.02c-2.84-.48-5-2.94-5-5.91s2.16-5.43 5-5.91V10l4.55-4.45zM19.93 11c-.17-1.39-.72-2.73-1.62-3.89l-1.42 1.42c.54.75.88 1.6 1.02 2.47h2.02zM13 17.9v2.02c1.39-.17 2.74-.71 3.9-1.61l-1.44-1.44c-.75.54-1.59.89-2.46 1.03zm3.89-2.42l1.42 1.41c.9-1.16 1.45-2.5 1.62-3.89h-2.02c-.14.87-.48 1.72-1.02 2.48z"/></svg>
         </button>
         <button id="chat-preview" aria-label="Open chat" tabindex="-1">
           <span id="chat-preview-name"></span> <span id="chat-preview-text"></span>
         </button>
       </div>
+      <div id="takeback" role="alert" hidden>
+        <span id="takeback-text"></span>
+        <div id="takeback-votes"></div>
+      </div>
+      <ol id="log"></ol>
       <section id="chat" aria-label="Chat" hidden>
         <ul id="chat-messages"></ul>
         <form id="chat-form">

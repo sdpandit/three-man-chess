@@ -149,7 +149,7 @@ function connect() {
       message.messages.forEach(addChatMessage);
     } else if (message.type === 'chat') {
       addChatMessage(message.message);
-      if (phoneLayout.matches && !$('game').classList.contains('chat-open')) {
+      if (!chatInView()) {
         markChatUnread();
         if (message.message.color !== room?.you) showChatPreview(message.message);
       }
@@ -297,11 +297,15 @@ function svgEl(name, attrs = {}) {
   return el;
 }
 
-// Whose side of the board a spectator watches from. They can turn it to each player's.
-let spectatorView = 'w';
+// How many thirds of a turn the board has been rotated, from the menu.
+let boardTurns = 0;
 
-// In solo mode the view stays put rather than spinning every turn.
-const viewOffset = () => SECTOR_MIDDLE[solo ? 'w' : room.you ?? spectatorView];
+// Players see their own side at the bottom, spectators White's. In solo mode the view stays
+// put rather than spinning every turn. Rotating the board moves on to the next side.
+function viewOffset() {
+  const home = solo ? 'w' : room.you ?? 'w';
+  return SECTOR_MIDDLE[COLORS[(COLORS.indexOf(home) + boardTurns) % COLORS.length]];
+}
 // Each player sees their own sector at the bottom of the board.
 function fileAngle(file) {
   return ((file - viewOffset()) / FILES) * 2 * Math.PI + Math.PI / 2;
@@ -656,18 +660,16 @@ function renderLog() {
   $('history-start').disabled = currentStep() === 0;
   $('history-forward').disabled = viewStep === null;
   $('history-latest').disabled = viewStep === null;
-  // Spectators can't take moves back, but they can choose whose side to watch from.
-  const spectating = !solo && !room.you;
-  $('undo').hidden = spectating;
-  $('rotate').hidden = !spectating;
-  const nextView = COLORS[(COLORS.indexOf(spectatorView) + 1) % COLORS.length];
-  const rotateLabel = `Watch from ${room.players[nextView]?.name ?? COLOR_NAMES[nextView]}'s side`;
-  $('rotate').title = rotateLabel;
-  $('rotate').setAttribute('aria-label', rotateLabel);
-  $('undo').disabled = solo ? !game.history?.length : !room.canTakeBack;
-  const undoLabel = solo ? 'Undo' : 'Ask to take back your move';
-  $('undo').title = undoLabel;
-  $('undo').setAttribute('aria-label', undoLabel);
+  // Spectators have no moves to take back.
+  $('menu-takeback').hidden = !solo && !room.you;
+  $('menu-takeback').disabled = solo ? !game.history?.length : !room.canTakeBack;
+  $('undo-solo').disabled = !game.history?.length;
+  $('menu-takeback-text').textContent = solo ? 'Undo move' : 'Request takeback';
+}
+
+function setMenuOpen(open) {
+  $('game-menu').hidden = !open;
+  $('menu-toggle').setAttribute('aria-expanded', String(open));
 }
 
 // ---- Chat ----
@@ -914,7 +916,8 @@ function showResultOnce() {
 
 // Back to the home screen, to create or join another game.
 function returnToLobby() {
-  spectatorView = 'w';
+  boardTurns = 0;
+  setMenuOpen(false);
   if ($('result').open) $('result').close();
   // Without a game server there is no lobby to go to, just a fresh board.
   if (boardOnly) {
@@ -932,14 +935,50 @@ function returnToLobby() {
   $('chat-messages').replaceChildren();
   setChatOpen(false);
   setMovesOpen(false);
+  clearChatUnread();
   history.replaceState(null, '', location.pathname);
   show('home');
 }
 
-// Marks the closed chat's button with a steady glow and a dot until the chat is opened.
+// Phones show the chat when it's opened; desktops unless it's been hidden from the menu.
+function chatInView() {
+  return phoneLayout.matches ? $('game').classList.contains('chat-open') : !$('game').classList.contains('hide-chat');
+}
+
+// Lights up the button that brings the chat back, with a steady glow and a dot, until it does.
 function markChatUnread() {
-  $('chat-dot').hidden = false;
-  $('chat-toggle').classList.add('unread');
+  $('game').classList.add('chat-unread');
+}
+
+function clearChatUnread() {
+  $('game').classList.remove('chat-unread');
+}
+
+function scrollChatToEnd() {
+  const list = $('chat-messages');
+  list.scrollTop = list.scrollHeight;
+}
+
+// Desktops only: hides or shows the move list or the chat ('moves' or 'chat'). The choice
+// is remembered for next time.
+function setPanelHidden(part, hidden) {
+  $('game').classList.toggle(`hide-${part}`, hidden);
+  localStorage.setItem(`tpc-hide-${part}`, hidden ? '1' : '');
+  $(`menu-${part}-text`).textContent = `${hidden ? 'Show' : 'Hide'} ${part}`;
+  if (hidden) return;
+  if (part === 'moves') {
+    scrollLogToCurrent();
+    return;
+  }
+  hideChatPreview();
+  clearChatUnread();
+  scrollChatToEnd();
+}
+
+// Brings the chat into view, whichever way the layout hides it.
+function showChat() {
+  if (phoneLayout.matches) setChatOpen(true);
+  else setPanelHidden('chat', false);
 }
 
 let chatPreviewTimer = null;
@@ -967,10 +1006,8 @@ function setChatOpen(open) {
   $('game').classList.toggle('chat-open', open);
   $('chat-toggle').setAttribute('aria-expanded', String(open));
   if (!open) return;
-  $('chat-dot').hidden = true;
-  $('chat-toggle').classList.remove('unread');
-  const list = $('chat-messages');
-  list.scrollTop = list.scrollHeight;
+  clearChatUnread();
+  scrollChatToEnd();
   $('chat').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
@@ -989,6 +1026,12 @@ function renderGame() {
   renderTakeback();
   $('chat').hidden = solo;
   $('chat-toggle').hidden = solo;
+  $('menu-chat').hidden = solo;
+  // The analysis board swaps the menu for undo and rotate buttons.
+  $('game').classList.toggle('solo', solo);
+  $('menu-wrap').hidden = solo;
+  $('undo-solo').hidden = !solo;
+  $('rotate-solo').hidden = !solo;
   $('chat-form').hidden = !room.you;
   renderBoard();
   renderPanel();
@@ -999,8 +1042,12 @@ function renderGame() {
 
 $('start').addEventListener('click', () => send({ type: 'start' }));
 $('chat-toggle').addEventListener('click', () => setChatOpen(!$('game').classList.contains('chat-open')));
-$('chat-preview').addEventListener('click', () => setChatOpen(true));
-$('moves-toggle').addEventListener('click', () => setMovesOpen(!$('game').classList.contains('moves-open')));
+$('chat-preview').addEventListener('click', showChat);
+// Phones open the move list below the board; desktops (analysis board only) show or hide it.
+$('moves-toggle').addEventListener('click', () => {
+  if (phoneLayout.matches) setMovesOpen(!$('game').classList.contains('moves-open'));
+  else setPanelHidden('moves', !$('game').classList.contains('hide-moves'));
+});
 $('review').addEventListener('click', () => $('result').close());
 $('to-lobby').addEventListener('click', returnToLobby);
 $('leave-game').addEventListener('click', returnToLobby);
@@ -1037,16 +1084,34 @@ $('resign').addEventListener('click', () => {
   viewStep = null;
   send({ type: 'resign' });
 });
-// Turns the board a third of the way round, to the next player's side.
-$('rotate').addEventListener('click', () => {
-  spectatorView = COLORS[(COLORS.indexOf(spectatorView) + 1) % COLORS.length];
-  renderBoard();
-  renderPanel();
+$('menu-toggle').addEventListener('click', () => setMenuOpen($('game-menu').hidden));
+// A click anywhere else closes the menu.
+document.addEventListener('click', (event) => {
+  if (!$('menu-wrap').contains(event.target)) setMenuOpen(false);
 });
-$('undo').addEventListener('click', () => {
+$('undo-solo').addEventListener('click', undoSolo);
+$('menu-takeback').addEventListener('click', () => {
+  setMenuOpen(false);
   if (solo) undoSolo();
   else send({ type: 'takeback' });
 });
+for (const part of ['moves', 'chat']) {
+  $(`menu-${part}`).addEventListener('click', () => {
+    setMenuOpen(false);
+    setPanelHidden(part, !$('game').classList.contains(`hide-${part}`));
+  });
+  setPanelHidden(part, localStorage.getItem(`tpc-hide-${part}`) === '1');
+}
+// Turns the board a third of the way round, to the next player's side.
+function rotateBoard() {
+  boardTurns = (boardTurns + 1) % COLORS.length;
+  renderBoard();
+}
+$('menu-rotate').addEventListener('click', () => {
+  setMenuOpen(false);
+  rotateBoard();
+});
+$('rotate-solo').addEventListener('click', rotateBoard);
 $('name').addEventListener('change', () => {
   if (room?.you && $('name').value.trim()) rename($('name').value);
 });
@@ -1088,6 +1153,10 @@ $('history-latest').addEventListener('click', () => goToStep(room.game.history.l
 document.addEventListener('keydown', (event) => {
   if ($('game').hidden || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
   if (event.target instanceof HTMLInputElement) return;
+  if (event.key === 'Escape' && !$('game-menu').hidden) {
+    setMenuOpen(false);
+    return;
+  }
   if (event.key === 'Escape' && pendingPromotion) {
     cancelPromotion();
     return;
