@@ -24,9 +24,16 @@ Move pieces by dragging them or by clicking the piece and then its destination. 
 dropped on an illegal square goes back where it started.
 
 During a game, click any move in the history or use the left and right arrow keys to
-look at past positions. Moves can only be made from the latest position. On the analysis
-board, undo takes back the last action. Online, it asks to take back your last move: you
-can ask once, until the next move is made, and it only happens if every other player
+look at past positions. Moves can only be made from the latest position.
+
+The ⋯ button opens a menu. Its "Rotate board" turns the board a third of the way round, so
+anyone, players and spectators alike, can watch from each player's side. On a computer, the
+menu can also hide the move list and the chat, and the browser remembers that for next
+time. While the chat is hidden, a new message shows briefly above the buttons and the ⋯
+button glows until the chat is shown again. The analysis board has no menu: it has its
+own undo button, which takes back one action at a time, as far back as you like, and a
+rotate button. Online, "Request takeback" in the menu asks to take back your last move:
+you can ask once, until the next move is made, and it only happens if every other player
 still in the game agrees, counting anyone the move knocked out. Clocks go back to where
 they stood when the move was made. A request that isn't fully answered within 15 seconds
 is declined, and if the player on move agrees, their clock waits while the others decide.
