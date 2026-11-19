@@ -38,7 +38,8 @@ let sentMove = null;
 let watchingCode = null;
 // True while you're typing a new name in the player list, so updates don't wipe it out.
 let editingName = false;
-// Phones show chat only when opened from the button row, so new messages light a dot there.
+// Phones open the move list and chat below the board from the menu; desktops show them
+// beside it unless hidden.
 const phoneLayout = matchMedia('(max-width: 800px)');
 // GitHub Pages has no game server, so that copy of the site is only the analysis board,
 // as is any page opened with ?solo.
@@ -53,6 +54,13 @@ const tokenKey = (code) => `tpc-token-${code}`;
 const hostTokenKey = (code) => `tpc-host-${code}`;
 const roomCodeFromUrl = () => new URL(location.href).searchParams.get('room')?.toUpperCase() ?? null;
 
+// Forgets any half-made move and goes back to the live position.
+function clearSelection() {
+  selected = null;
+  pendingPromotion = null;
+  viewStep = null;
+}
+
 // Starts the analysis board from the opening position. A new board from the menu keeps the
 // names you gave the players.
 function startSolo(keepNames = false) {
@@ -61,9 +69,7 @@ function startSolo(keepNames = false) {
   const players = keepNames ? room.players
     : Object.fromEntries(COLORS.map((color, i) => [color, { name: `Player ${i + 1}`, online: true }]));
   room = { code: null, you: 'w', players, game: createGame() };
-  selected = null;
-  pendingPromotion = null;
-  viewStep = null;
+  clearSelection();
   positions = [];
   renderGame();
 }
@@ -76,9 +82,7 @@ function playSolo(message) {
   } catch (err) {
     toast(err.message);
   }
-  selected = null;
-  pendingPromotion = null;
-  viewStep = null;
+  clearSelection();
   rememberLivePosition();
   renderGame();
 }
@@ -90,9 +94,7 @@ function undoSolo() {
   room.game = positionAt(step);
   positions.length = step + 1;
   room.you = room.game.turn;
-  selected = null;
-  pendingPromotion = null;
-  viewStep = null;
+  clearSelection();
   renderGame();
 }
 
@@ -173,10 +175,64 @@ const PAGE_TITLE = document.title;
 
 // Marks the browser tab while it's your move in the live game, so you can see it from
 // another tab. Looking back through earlier moves doesn't hide it: it's still your move.
+// It also chimes when the move comes round to you, but not for a game you've just opened.
+// wasYourMove is whether it was your move at the last update; null outside an online game.
+let wasYourMove = null;
 function updateTitle() {
-  const yourMove = !solo && !$('game').hidden && room?.game?.status === 'active' && room.game.turn === room.you;
+  const inGame = !solo && !$('game').hidden;
+  const yourMove = inGame && room?.game?.status === 'active' && room.game.turn === room.you;
   document.title = yourMove ? `● Your move · ${PAGE_TITLE}` : PAGE_TITLE;
+  if (yourMove && wasYourMove === false) chime();
+  wasYourMove = inGame ? yourMove : null;
 }
+
+// ---- Sound ----
+
+let audio = null;
+
+// Browsers only let a page make sound after you've interacted with it, so the sound system
+// starts on your first click or key press.
+function unlockAudio() {
+  audio ??= new AudioContext();
+  if (audio.state === 'suspended') audio.resume();
+}
+document.addEventListener('pointerdown', unlockAudio);
+document.addEventListener('keydown', unlockAudio);
+
+// Muting is remembered by the browser, for every game.
+let muted = localStorage.getItem('tpc-muted') === '1';
+const SPEAKER = 'M3 9v6h4l5 5V4L7 9H3z';
+const SOUND_ON = `${SPEAKER}m13.5 3A4.5 4.5 0 0 0 14 7.97v8.05A4.47 4.47 0 0 0 16.5 12zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23z`;
+const SOUND_OFF = `${SPEAKER}m13.59 3L14.5 9.91 12.41 12 14.5 14.09 15.91 15.5 18 13.41l2.09 2.09 1.41-1.41L19.41 12l2.09-2.09-1.41-1.41L18 10.59 15.91 8.5z`;
+
+// The menu item says what choosing it will do, and its icon shows that too.
+function setMuted(value) {
+  muted = value;
+  localStorage.setItem('tpc-muted', muted ? '1' : '');
+  $('menu-sound-text').textContent = muted ? 'Unmute sounds' : 'Mute sounds';
+  $('menu-sound-icon').setAttribute('d', muted ? SOUND_ON : SOUND_OFF);
+}
+
+// A short, soft two-note chime, rising.
+function chime() {
+  if (muted || !audio || audio.state !== 'running') return;
+  const start = audio.currentTime;
+  for (const [frequency, delay] of [[880, 0], [1318.5, 0.12]]) {
+    const tone = audio.createOscillator();
+    const volume = audio.createGain();
+    tone.type = 'sine';
+    tone.frequency.value = frequency;
+    const at = start + delay;
+    volume.gain.setValueAtTime(0, at);
+    volume.gain.linearRampToValueAtTime(0.18, at + 0.01);
+    volume.gain.exponentialRampToValueAtTime(0.001, at + 0.4);
+    tone.connect(volume).connect(audio.destination);
+    tone.start(at);
+    tone.stop(at + 0.42);
+  }
+}
+
+// ---- Messages from the server ----
 
 function receiveRoom(message) {
   // Someone connecting or dropping out shouldn't clear a half-made move.
@@ -286,11 +342,21 @@ function chosenTimeControl() {
     : null;
 }
 
+// The small coloured square for a player. With a label, screen readers announce it.
+function swatch(color, label) {
+  const element = document.createElement('span');
+  // Chat messages posted under a made-up name may have no seat colour.
+  element.className = color ? `swatch ${color}` : '';
+  if (label) {
+    element.setAttribute('role', 'img');
+    element.setAttribute('aria-label', label);
+  }
+  return element;
+}
+
 function colorLabel(color) {
   const label = document.createElement('span');
-  const swatch = document.createElement('span');
-  swatch.className = `swatch ${color}`;
-  label.append(swatch, COLOR_NAMES[color]);
+  label.append(swatch(color), COLOR_NAMES[color]);
   return label;
 }
 
@@ -310,6 +376,12 @@ let boardTurns = 0;
 function viewOffset() {
   const home = solo ? 'w' : room.you ?? 'w';
   return SECTOR_MIDDLE[COLORS[(COLORS.indexOf(home) + boardTurns) % COLORS.length]];
+}
+
+// Turns the board a third of the way round, to the next player's side.
+function rotateBoard() {
+  boardTurns = (boardTurns + 1) % COLORS.length;
+  renderBoard();
 }
 // Each player sees their own sector at the bottom of the board.
 function fileAngle(file) {
@@ -356,10 +428,8 @@ function renderBoard() {
   const targets = selected === null || !isMyTurn() || promoting
     ? []
     : legalMoves(game, room.you, selected).map((m) => m.to);
-  const kingsInCheck = new Set(game.status === 'active'
-    ? COLORS.filter((c) => game.alive[c] && isInCheck(game, c))
-      .map((c) => game.board.findIndex((p) => p?.color === c && p.type === 'K'))
-    : []);
+  const kingsInCheck = new Set([...playersInCheck(game)]
+    .map((c) => game.board.findIndex((p) => p?.color === c && p.type === 'K')));
 
   svg.append(svgEl('circle', { class: 'rim', r: OUTER_RADIUS + 5 }));
   for (let square = 0; square < SQUARES; square++) {
@@ -458,13 +528,17 @@ function drawPromotionMenu(svg, square, pawn) {
   });
 }
 
+// Sends a move and shows it on the board straight away, until the server answers.
+function sendMove(from, to, promotion) {
+  if (!solo && socket?.readyState === WebSocket.OPEN) sentMove = { from, to };
+  send({ type: 'move', from, to, promotion });
+}
+
 function choosePromotion(type) {
   const { from, to } = pendingPromotion;
   pendingPromotion = null;
   selected = null;
-  // Keeps the pawn on its new square until the server answers.
-  if (!solo && socket?.readyState === WebSocket.OPEN) sentMove = { from, to };
-  send({ type: 'move', from, to, promotion: type });
+  sendMove(from, to, type);
   if (!solo) renderGame();
 }
 
@@ -472,6 +546,18 @@ function cancelPromotion() {
   pendingPromotion = null;
   selected = null;
   renderGame();
+}
+
+// Which players are in check in a position. The board and the player list both ask, so
+// it's worked out once per position.
+const checkCache = new WeakMap();
+function playersInCheck(game) {
+  if (!checkCache.has(game)) {
+    checkCache.set(game, new Set(game.status === 'active'
+      ? COLORS.filter((c) => game.alive[c] && isInCheck(game, c))
+      : []));
+  }
+  return checkCache.get(game);
 }
 
 const isMyTurn = () => viewStep === null && room?.game?.status === 'active' && room.game.turn === room.you;
@@ -561,8 +647,7 @@ function dropPiece(from, to) {
     selected = from;
     pendingPromotion = { from, to };
   } else if (matches.length === 1) {
-    if (!solo && socket?.readyState === WebSocket.OPEN) sentMove = { from, to };
-    send({ type: 'move', from, to });
+    sendMove(from, to);
     if (solo) return;
   }
   renderBoard();
@@ -612,10 +697,8 @@ function fillLogLine(element, line) {
     element.textContent = line;
     return;
   }
-  const square = document.createElement('span');
-  square.className = `swatch log-square ${color}`;
-  square.setAttribute('role', 'img');
-  square.setAttribute('aria-label', COLOR_NAMES[color]);
+  const square = swatch(color, COLOR_NAMES[color]);
+  square.classList.add('log-square');
   element.append(square, line.slice(COLOR_NAMES[color].length + 2));
 }
 
@@ -665,7 +748,6 @@ function renderLog() {
   $('history-start').disabled = currentStep() === 0;
   $('history-forward').disabled = viewStep === null;
   $('history-latest').disabled = viewStep === null;
-  // Spectators have no moves to take back.
   // Undo on the analysis board, as often as you like; online, a takeback request, which
   // stays lit while it waits for votes and can be cancelled by pressing it again.
   const undo = $('undo');
@@ -691,13 +773,10 @@ function addChatMessage({ color, name, text }) {
   // Don't pull someone back down if they've scrolled up to read.
   const atBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 4;
   const entry = document.createElement('li');
-  const swatch = document.createElement('span');
-  // Messages posted under a made-up name may have no seat colour.
-  swatch.className = color ? `swatch ${color}` : '';
   const author = document.createElement('span');
   author.className = 'chat-name';
   author.textContent = `${name}: `;
-  entry.append(swatch, author, text);
+  entry.append(swatch(color), author, text);
   list.append(entry);
   if (atBottom) list.scrollTop = list.scrollHeight;
 }
@@ -710,16 +789,9 @@ function viewingText() {
   return `Viewing ${place}${waiting ? '. It\'s your move in the live game' : ''}`;
 }
 
-function colorMark(color) {
-  const mark = document.createElement('span');
-  mark.className = `swatch ${color}`;
-  mark.setAttribute('role', 'img');
-  mark.setAttribute('aria-label', COLOR_NAMES[color]);
-  return mark;
-}
-
 // The pieces of the status line: text, plus a coloured circle before a player's name.
 function statusParts() {
+  const colorMark = (color) => swatch(color, COLOR_NAMES[color]);
   if (viewStep !== null) return [viewingText()];
   const { game } = room;
   const you = solo ? null : room.you;
@@ -729,7 +801,7 @@ function statusParts() {
   }
   if (game.status === 'draw') return ['Draw by stalemate'];
   if (you && !game.alive[you]) return ['You are out. ', colorMark(game.turn), `${nameOf(game.turn)} to move`];
-  if (game.turn === you) return [isInCheck(game, you) ? 'Your move: you are in check!' : 'Your move'];
+  if (game.turn === you) return [playersInCheck(game).has(you) ? 'Your move: you are in check!' : 'Your move'];
   return [colorMark(game.turn), `${nameOf(game.turn)} to move`];
 }
 
@@ -755,12 +827,10 @@ function renderPlayers(game) {
     const player = room.players[color];
     const item = document.createElement('li');
     if (game.status === 'active' && game.turn === color) item.className = 'turn';
-    const swatch = document.createElement('span');
-    swatch.className = `swatch ${color}`;
     const name = document.createElement('span');
     name.textContent = !solo && color === room.you ? `${player.name} (you)` : player.name;
     if (!game.alive[color]) name.className = 'dead';
-    item.append(swatch, name);
+    item.append(swatch(color), name);
     // Online you can rename yourself; on the analysis board, every player.
     if (solo || color === room.you) {
       const edit = document.createElement('button');
@@ -777,7 +847,7 @@ function renderPlayers(game) {
       tag.textContent = ` ${text}`;
       item.append(tag);
     };
-    if (game.status === 'active' && game.alive[color] && isInCheck(game, color)) addTag('check', 'check');
+    if (playersInCheck(game).has(color)) addTag('check', 'check');
     if (!player.online) addTag('offline', 'tag');
     if (room.clock) {
       const clock = document.createElement('span');
@@ -876,11 +946,8 @@ function renderTakeback() {
     const canVote = color === room.you && !agreed;
     const row = document.createElement('div');
     row.className = 'vote';
-    const swatch = document.createElement('span');
-    swatch.className = `swatch ${color}`;
-    swatch.title = name;
-    swatch.setAttribute('role', 'img');
-    swatch.setAttribute('aria-label', name);
+    const mark = swatch(color, name);
+    mark.title = name;
     const button = (symbol, accept, label) => {
       const element = document.createElement('button');
       element.textContent = symbol;
@@ -891,7 +958,7 @@ function renderTakeback() {
       element.addEventListener('click', () => send({ type: 'answerTakeback', accept }));
       return element;
     };
-    row.append(swatch, button('\u2713', true, 'Agree to the takeback'), button('\u2715', false, 'Refuse the takeback'));
+    row.append(mark, button('\u2713', true, 'Agree to the takeback'), button('\u2715', false, 'Refuse the takeback'));
     return row;
   }));
 }
@@ -946,10 +1013,8 @@ function returnToLobby() {
   if (!solo) send({ type: 'leave' });
   solo = false;
   room = null;
-  viewStep = null;
+  clearSelection();
   positions = [];
-  selected = null;
-  pendingPromotion = null;
   resultShownFor = null;
   $('chat-messages').replaceChildren();
   setChatOpen(false);
@@ -964,7 +1029,7 @@ function chatInView() {
   return phoneLayout.matches ? $('game').classList.contains('chat-open') : !$('game').classList.contains('hide-chat');
 }
 
-// Lights up the button that brings the chat back, with a steady glow and a dot, until it does.
+// Lights up the menu button, with a steady glow and a dot, until the chat is shown.
 function markChatUnread() {
   $('game').classList.add('chat-unread');
 }
@@ -1002,7 +1067,7 @@ function showChat() {
 
 let chatPreviewTimer = null;
 
-// The start of a new message in a bubble over the chat button, for a few seconds. CSS cuts
+// The start of a new message in a bubble above the menu button, for a few seconds. CSS cuts
 // a long one off with an ellipsis.
 function showChatPreview({ name, text }) {
   $('chat-preview-name').textContent = `${name}:`;
@@ -1056,6 +1121,8 @@ function renderGame() {
   $('chat').hidden = solo;
   $('menu-chat').hidden = solo;
   $('menu-new-board').hidden = !solo;
+  // Only players hear the your-move chime: the analysis board and spectators have no sounds.
+  $('menu-sound').hidden = solo || !room.you;
   $('menu-new-board').disabled = solo && !room.game.history?.length;
   $('chat-form').hidden = !room.you;
   renderBoard();
@@ -1086,7 +1153,6 @@ for (const id of ['use-clock', 'clock-minutes', 'clock-increment']) {
 }
 $('solo').addEventListener('click', () => startSolo());
 $('menu-new-board').addEventListener('click', () => {
-  setMenuOpen(false);
   if (!confirm('Start a new board? The moves on this one will be lost.')) return;
   startSolo(true);
 });
@@ -1105,12 +1171,15 @@ $('copy-link').addEventListener('click', async () => {
   }
 });
 $('resign').addEventListener('click', () => {
-  setMenuOpen(false);
   if (!confirm('Resign? Your pieces stay on the board as corpses.')) return;
   viewStep = null;
   send({ type: 'resign' });
 });
 $('menu-toggle').addEventListener('click', () => setMenuOpen($('game-menu').hidden));
+// Choosing anything in the menu closes it first, before any confirmation pops up.
+$('game-menu').addEventListener('click', (event) => {
+  if (event.target.closest('[role="menuitem"]')) setMenuOpen(false);
+}, true);
 // A click anywhere else closes the menu.
 document.addEventListener('click', (event) => {
   if (!$('menu-wrap').contains(event.target)) setMenuOpen(false);
@@ -1124,22 +1193,15 @@ $('undo').addEventListener('click', () => {
 const openBelowBoard = { moves: setMovesOpen, chat: setChatOpen };
 for (const part of ['moves', 'chat']) {
   $(`menu-${part}`).addEventListener('click', () => {
-    setMenuOpen(false);
     const game = $('game').classList;
     if (phoneLayout.matches) openBelowBoard[part](!game.contains(`${part}-open`));
     else setPanelHidden(part, !game.contains(`hide-${part}`));
   });
   setPanelHidden(part, localStorage.getItem(`tpc-hide-${part}`) === '1');
 }
-// Turns the board a third of the way round, to the next player's side.
-function rotateBoard() {
-  boardTurns = (boardTurns + 1) % COLORS.length;
-  renderBoard();
-}
-$('menu-rotate').addEventListener('click', () => {
-  setMenuOpen(false);
-  rotateBoard();
-});
+setMuted(muted);
+$('menu-sound').addEventListener('click', () => setMuted(!muted));
+$('menu-rotate').addEventListener('click', rotateBoard);
 $('name').addEventListener('change', () => {
   if (room?.you && $('name').value.trim()) rename($('name').value);
 });
