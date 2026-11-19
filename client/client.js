@@ -53,11 +53,16 @@ const tokenKey = (code) => `tpc-token-${code}`;
 const hostTokenKey = (code) => `tpc-host-${code}`;
 const roomCodeFromUrl = () => new URL(location.href).searchParams.get('room')?.toUpperCase() ?? null;
 
-function startSolo() {
+// Starts the analysis board from the opening position. A new board from the menu keeps the
+// names you gave the players.
+function startSolo(keepNames = false) {
   solo = true;
   resultShownFor = null;
-  const players = Object.fromEntries(COLORS.map((color, i) => [color, { name: `Player ${i + 1}`, online: true }]));
+  const players = keepNames ? room.players
+    : Object.fromEntries(COLORS.map((color, i) => [color, { name: `Player ${i + 1}`, online: true }]));
   room = { code: null, you: 'w', players, game: createGame() };
+  selected = null;
+  pendingPromotion = null;
   viewStep = null;
   positions = [];
   renderGame();
@@ -254,7 +259,7 @@ function renderLobby() {
   $('watching-note').hidden = !watching;
   // Once seated you're playing, so there's nothing to switch.
   $('watch').hidden = Boolean(room.you);
-  $('watch').textContent = watching ? 'Take a seat instead' : 'Just watch';
+  $('watch').textContent = watching ? 'Take a seat instead' : 'Spectate';
 }
 
 // Shows the game's time control in the creator's clock settings. A box being typed in is
@@ -661,10 +666,17 @@ function renderLog() {
   $('history-forward').disabled = viewStep === null;
   $('history-latest').disabled = viewStep === null;
   // Spectators have no moves to take back.
-  $('menu-takeback').hidden = !solo && !room.you;
-  $('menu-takeback').disabled = solo ? !game.history?.length : !room.canTakeBack;
-  $('undo-solo').disabled = !game.history?.length;
-  $('menu-takeback-text').textContent = solo ? 'Undo move' : 'Request takeback';
+  // Undo on the analysis board, as often as you like; online, a takeback request, which
+  // stays lit while it waits for votes and can be cancelled by pressing it again.
+  const undo = $('undo');
+  const asking = !solo && Boolean(room.you) && room.takeback?.by === room.you;
+  undo.classList.toggle('pending', asking);
+  undo.disabled = solo ? !game.history?.length : !asking && !room.canTakeBack;
+  const undoLabel = solo ? 'Undo move'
+    : asking ? 'Cancel takeback request'
+      : room.you ? 'Request takeback' : 'Only players can request takebacks';
+  undo.title = undoLabel;
+  undo.setAttribute('aria-label', undoLabel);
 }
 
 function setMenuOpen(open) {
@@ -732,6 +744,8 @@ function renderPanel() {
 
   const live = room.game;
   $('resign').disabled = !room.you || live.status !== 'active' || !live.alive[room.you];
+  // Spectators have nothing to resign.
+  $('resign').hidden = !solo && !room.you;
 }
 
 function renderPlayers(game) {
@@ -747,13 +761,14 @@ function renderPlayers(game) {
     name.textContent = !solo && color === room.you ? `${player.name} (you)` : player.name;
     if (!game.alive[color]) name.className = 'dead';
     item.append(swatch, name);
-    if (!solo && color === room.you) {
+    // Online you can rename yourself; on the analysis board, every player.
+    if (solo || color === room.you) {
       const edit = document.createElement('button');
       edit.className = 'rename';
       edit.textContent = '✎';
-      edit.title = 'Change your name';
-      edit.setAttribute('aria-label', 'Change your name');
-      edit.addEventListener('click', () => startRename(item, name, player.name));
+      edit.title = solo ? `Rename ${player.name}` : 'Change your name';
+      edit.setAttribute('aria-label', edit.title);
+      edit.addEventListener('click', () => startRename(item, color, player.name));
       item.append(edit);
     }
     const addTag = (text, className) => {
@@ -809,20 +824,24 @@ setInterval(() => {
 
 // Swaps your name in the player list for a text box. Enter or clicking away saves it,
 // Escape cancels.
-function startRename(item, nameElement, current) {
+function startRename(item, color, current) {
   editingName = true;
   const input = document.createElement('input');
   input.className = 'rename-input';
   input.maxLength = 24;
   input.value = current;
-  input.setAttribute('aria-label', 'Your name');
+  input.setAttribute('aria-label', solo ? `Name for ${COLOR_NAMES[color]}` : 'Your name');
   const finish = (save) => {
     if (!editingName) return;
     editingName = false;
     const name = input.value.trim();
     if (save && name && name !== current) {
-      rename(name);
-      $('name').value = name;
+      // The analysis board's names stay on this page; online, the server tells everyone.
+      if (solo) room.players[color].name = name;
+      else {
+        rename(name);
+        $('name').value = name;
+      }
     }
     renderPanel();
   };
@@ -964,7 +983,7 @@ function scrollChatToEnd() {
 function setPanelHidden(part, hidden) {
   $('game').classList.toggle(`hide-${part}`, hidden);
   localStorage.setItem(`tpc-hide-${part}`, hidden ? '1' : '');
-  $(`menu-${part}-text`).textContent = `${hidden ? 'Show' : 'Hide'} ${part}`;
+  labelPanelItems();
   if (hidden) return;
   if (part === 'moves') {
     scrollLogToCurrent();
@@ -1004,17 +1023,27 @@ function setChatOpen(open) {
   hideChatPreview();
   if (open) setMovesOpen(false);
   $('game').classList.toggle('chat-open', open);
-  $('chat-toggle').setAttribute('aria-expanded', String(open));
+  labelPanelItems();
   if (!open) return;
   clearChatUnread();
   scrollChatToEnd();
   $('chat').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
+// The menu's moves and chat items say what choosing them will do: phones open and close
+// them below the board, desktops show and hide them in the side panel.
+function labelPanelItems() {
+  const game = $('game').classList;
+  for (const part of ['moves', 'chat']) {
+    const showing = phoneLayout.matches ? game.contains(`${part}-open`) : !game.contains(`hide-${part}`);
+    $(`menu-${part}-text`).textContent = `${showing ? 'Hide' : 'Show'} ${part}`;
+  }
+}
+
 function setMovesOpen(open) {
   if (open) setChatOpen(false);
   $('game').classList.toggle('moves-open', open);
-  $('moves-toggle').setAttribute('aria-expanded', String(open));
+  labelPanelItems();
   if (!open) return;
   // The list was hidden, so it couldn't be scrolled while moves came in.
   scrollLogToCurrent();
@@ -1025,13 +1054,9 @@ function renderGame() {
   show('game');
   renderTakeback();
   $('chat').hidden = solo;
-  $('chat-toggle').hidden = solo;
   $('menu-chat').hidden = solo;
-  // The analysis board swaps the menu for undo and rotate buttons.
-  $('game').classList.toggle('solo', solo);
-  $('menu-wrap').hidden = solo;
-  $('undo-solo').hidden = !solo;
-  $('rotate-solo').hidden = !solo;
+  $('menu-new-board').hidden = !solo;
+  $('menu-new-board').disabled = solo && !room.game.history?.length;
   $('chat-form').hidden = !room.you;
   renderBoard();
   renderPanel();
@@ -1041,13 +1066,8 @@ function renderGame() {
 // ---- Wiring ----
 
 $('start').addEventListener('click', () => send({ type: 'start' }));
-$('chat-toggle').addEventListener('click', () => setChatOpen(!$('game').classList.contains('chat-open')));
 $('chat-preview').addEventListener('click', showChat);
-// Phones open the move list below the board; desktops (analysis board only) show or hide it.
-$('moves-toggle').addEventListener('click', () => {
-  if (phoneLayout.matches) setMovesOpen(!$('game').classList.contains('moves-open'));
-  else setPanelHidden('moves', !$('game').classList.contains('hide-moves'));
-});
+phoneLayout.addEventListener('change', labelPanelItems);
 $('review').addEventListener('click', () => $('result').close());
 $('to-lobby').addEventListener('click', returnToLobby);
 $('leave-game').addEventListener('click', returnToLobby);
@@ -1064,7 +1084,12 @@ for (const id of ['use-clock', 'clock-minutes', 'clock-increment']) {
     send({ type: 'setTimeControl', timeControl });
   });
 }
-$('solo').addEventListener('click', startSolo);
+$('solo').addEventListener('click', () => startSolo());
+$('menu-new-board').addEventListener('click', () => {
+  setMenuOpen(false);
+  if (!confirm('Start a new board? The moves on this one will be lost.')) return;
+  startSolo(true);
+});
 $('join-form').addEventListener('submit', (event) => {
   event.preventDefault();
   const code = $('join-code').value.trim().toUpperCase();
@@ -1080,6 +1105,7 @@ $('copy-link').addEventListener('click', async () => {
   }
 });
 $('resign').addEventListener('click', () => {
+  setMenuOpen(false);
   if (!confirm('Resign? Your pieces stay on the board as corpses.')) return;
   viewStep = null;
   send({ type: 'resign' });
@@ -1089,16 +1115,19 @@ $('menu-toggle').addEventListener('click', () => setMenuOpen($('game-menu').hidd
 document.addEventListener('click', (event) => {
   if (!$('menu-wrap').contains(event.target)) setMenuOpen(false);
 });
-$('undo-solo').addEventListener('click', undoSolo);
-$('menu-takeback').addEventListener('click', () => {
-  setMenuOpen(false);
+$('undo').addEventListener('click', () => {
   if (solo) undoSolo();
+  else if ($('undo').classList.contains('pending')) send({ type: 'cancelTakeback' });
   else send({ type: 'takeback' });
 });
+// Phones open and close the move list and chat below the board; desktops show and hide them.
+const openBelowBoard = { moves: setMovesOpen, chat: setChatOpen };
 for (const part of ['moves', 'chat']) {
   $(`menu-${part}`).addEventListener('click', () => {
     setMenuOpen(false);
-    setPanelHidden(part, !$('game').classList.contains(`hide-${part}`));
+    const game = $('game').classList;
+    if (phoneLayout.matches) openBelowBoard[part](!game.contains(`${part}-open`));
+    else setPanelHidden(part, !game.contains(`hide-${part}`));
   });
   setPanelHidden(part, localStorage.getItem(`tpc-hide-${part}`) === '1');
 }
@@ -1111,7 +1140,6 @@ $('menu-rotate').addEventListener('click', () => {
   setMenuOpen(false);
   rotateBoard();
 });
-$('rotate-solo').addEventListener('click', rotateBoard);
 $('name').addEventListener('change', () => {
   if (room?.you && $('name').value.trim()) rename($('name').value);
 });

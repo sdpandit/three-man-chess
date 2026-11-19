@@ -391,6 +391,16 @@ const handlers = {
     broadcast(room);
   },
 
+  // Withdraws your own pending request. You still can't ask again until the next move.
+  cancelTakeback(socket) {
+    const room = socket.room;
+    const color = room && sockets.get(room.code).get(socket);
+    if (!room?.takeback || room.undo?.by !== color) throw new Error('You have no takeback request to cancel');
+    endTakeback(room, `${room.seats[color].name} cancelled the takeback request`);
+    touch(room);
+    broadcast(room);
+  },
+
   answerTakeback(socket, { accept }) {
     const room = socket.room;
     const color = room && sockets.get(room.code).get(socket);

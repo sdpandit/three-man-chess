@@ -405,6 +405,18 @@ test('takebacks: the player on move pauses their clock by agreeing, and requests
     const resumed = await latest(w, (m) => !m.takeback);
     assert.equal(resumed.clock.running, 'b');
     assert.ok(blackPaused.clock.left.b - resumed.clock.left.b < 100, 'no time was charged during the pause');
+    // Gray can cancel their own request, but then can't ask again for that move.
+    b.send({ type: 'move', from: sq(1, 17), to: sq(2, 17) });
+    await latest(w, (m) => m.game.turn === 'w' && m.game.board[sq(2, 17)]);
+    b.send({ type: 'takeback' });
+    await latest(w, (m) => m.takeback?.by === 'b');
+    w.send({ type: 'cancelTakeback' });
+    await w.until((m) => m.type === 'error');
+    b.send({ type: 'cancelTakeback' });
+    for (const c of [w, g, b]) await c.until((m) => m.type === 'notice' && /cancelled/.test(m.text));
+    const cancelled = await latest(b, (m) => !m.takeback);
+    assert.equal(cancelled.canTakeBack, false);
+    assert.equal(cancelled.game.turn, 'w', 'the move stands');
     for (const c of [w, g, b]) c.ws.close();
   } finally {
     await stopServer(server);

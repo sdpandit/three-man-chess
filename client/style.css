@@ -229,8 +229,9 @@ aside {
 .log-move:hover { background: rgba(255, 255, 255, .08); }
 
 #history-nav { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+/* Your takeback request, waiting for votes: press again to cancel it. */
+#undo.pending { color: #2b211a; background: var(--accent); }
 #history-nav button { letter-spacing: -2px; }
-#resign { background: #8c3a2e; }
 #history-nav svg { display: block; width: 18px; height: 18px; margin: auto; fill: currentColor; }
 /* The "more options" button and its menu, which opens over what's below it. */
 #menu-wrap { position: relative; display: grid; }
@@ -264,27 +265,7 @@ aside {
 }
 #history-nav #game-menu button:hover:not(:disabled) { background: var(--raised); filter: none; }
 #history-nav #game-menu svg { flex: none; margin: 0; }
-/* Phones only: there, chat and the move list open and close from the button row. */
-#chat-toggle { display: none; position: relative; }
-#moves-toggle { display: none; }
-/* The analysis board has no menu: its undo and rotate get buttons of their own, in two rows
-   of four on desktops and phones alike. */
-#undo-solo, #rotate-solo { display: none; }
-#game.solo #history-nav {
-  grid-template-columns: repeat(4, 1fr);
-  grid-template-areas:
-    "back forward moves resign"
-    "start latest undo rotate";
-}
-#game.solo :is(#moves-toggle, #undo-solo, #rotate-solo) { display: block; }
-#game.solo #history-back { grid-area: back; }
-#game.solo #history-forward { grid-area: forward; }
-#game.solo #moves-toggle { grid-area: moves; }
-#game.solo #resign { grid-area: resign; }
-#game.solo #history-start { grid-area: start; }
-#game.solo #history-latest { grid-area: latest; }
-#game.solo #undo-solo { grid-area: undo; }
-#game.solo #rotate-solo { grid-area: rotate; }
+#history-nav #game-menu #resign:not(:disabled) { color: #f0907f; }
 /* While the chat is out of sight, a new message shows in a bubble above the button row,
    and the button that brings the chat back glows with a dot. */
 #history-nav { position: relative; }
@@ -314,11 +295,11 @@ aside {
 }
 #history-nav #chat-preview.show { opacity: 1; transform: none; pointer-events: auto; }
 #chat-preview-name { font-weight: 700; }
-/* The tail, pointing down at the last column: the chat button on phones, the menu on desktops. */
+/* The tail, pointing down the last column, at the menu button. */
 #chat-preview::after {
   content: '';
   position: absolute;
-  right: 36px;
+  right: 38px;
   bottom: -7px;
   width: 12px;
   height: 12px;
@@ -328,13 +309,12 @@ aside {
   transform: rotate(45deg);
 }
 
-#game.chat-unread #chat-toggle { box-shadow: 0 0 10px 2px rgba(217, 164, 65, .65); }
-#chat-dot { display: none; }
-#game.chat-unread #chat-dot { display: block; }
 #menu-toggle { position: relative; }
 #menu-dot, #menu-chat-dot { display: none; }
+#game.chat-unread #menu-toggle { box-shadow: 0 0 10px 2px rgba(217, 164, 65, .65); }
+#game.chat-unread :is(#menu-dot, #menu-chat-dot) { display: block; }
 #menu-chat-dot { width: 8px; height: 8px; margin-left: auto; background: var(--accent); border-radius: 50%; }
-#chat-dot, #menu-dot {
+#menu-dot {
   position: absolute;
   top: 5px;
   right: calc(50% - 15px);
@@ -352,9 +332,6 @@ aside {
   #game.hide-moves #log, #game.hide-chat #chat { display: none; }
   #game.hide-chat #log { flex-basis: 420px; }
   #game.hide-moves #chat-messages { flex-basis: 420px; }
-  #game.chat-unread #menu-toggle { box-shadow: 0 0 10px 2px rgba(217, 164, 65, .65); }
-  #game.chat-unread :is(#menu-dot, #menu-chat-dot) { display: block; }
-  #game.solo:not(.hide-moves) #moves-toggle { color: #2b211a; background: var(--accent); }
 }
 #chat-messages {
   flex: 0 1 210px;
@@ -446,29 +423,12 @@ aside {
   /* Room to scroll the chat box clear of the floating request. */
   #game:has(#takeback:not([hidden])) { padding-bottom: 120px; }
   #board-wrap { order: 4; flex: none; }
-  /* The desktop's two rows, with the moves and chat buttons in an extra third column. */
-  #history-nav {
-    order: 5;
-    grid-template-columns: repeat(4, 1fr);
-    grid-template-areas:
-      "back forward moves resign"
-      "start latest chat menu";
-    gap: 6px;
-  }
-  #history-back { grid-area: back; }
-  #history-forward { grid-area: forward; }
-  #moves-toggle { grid-area: moves; }
-  #resign { grid-area: resign; }
-  #history-start { grid-area: start; }
-  #history-latest { grid-area: latest; }
-  #chat-toggle { grid-area: chat; }
-  #menu-wrap { grid-area: menu; }
-  /* Phones have their own buttons for these. */
-  #history-nav #game-menu :is(#menu-moves, #menu-chat) { display: none; }
+  #history-nav { order: 5; }
   /* The menu button is at the bottom right, so the menu opens upwards from there. */
   #game-menu { top: auto; bottom: calc(100% + 4px); }
-  /* The chat bubble ends over the chat button's column, the third, and its tail points down it. */
-  #history-nav #chat-preview { right: calc(25% + 2px); max-width: calc(75% - 2px); }
+  /* The bubble's tail points down the middle of the last column: a third of the row, less the
+     page's padding and the gaps between buttons. */
+  #chat-preview::after { right: calc((100vw - 28px) / 6 - 6px); }
   #leave-game { order: 6; }
   #chat { order: 7; }
   /* The move list opens below the board, in the same place as the chat. */
@@ -476,8 +436,6 @@ aside {
   #game:not(.moves-open) #log { display: none; }
   #game:not(.chat-open) #chat { display: none; }
   #chat-messages { flex: none; height: 190px; }
-  #chat-toggle, #moves-toggle { display: block; }
-  #game.chat-open #chat-toggle, #game.moves-open #moves-toggle { color: #2b211a; background: var(--accent); }
   /* The same height whether a button holds an icon or arrow characters. */
   #history-nav button { min-height: 40px; padding: 8px 0; }
   .card { margin: 16px; }
