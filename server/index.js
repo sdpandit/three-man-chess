@@ -270,6 +270,12 @@ function detach(socket) {
   if (rooms.has(code)) broadcast(room);
 }
 
+// The room a connection is in, and the seat it holds there, if any.
+function seatOf(socket) {
+  const room = socket.room;
+  return { room, color: room && sockets.get(room.code).get(socket) };
+}
+
 const handlers = {
   // The time control given here is only a starting point: the creator can change it in the lobby.
   create(socket, { timeControl }) {
@@ -332,8 +338,7 @@ const handlers = {
   // Players can change their name at any time, even mid-game. Their past chat messages
   // take the new name too, but messages posted under a made-up name keep theirs.
   rename(socket, { name }) {
-    const room = socket.room;
-    const color = room && sockets.get(room.code).get(socket);
+    const { room, color } = seatOf(socket);
     if (!color) throw new Error('Take a seat first');
     const newName = cleanName(name);
     room.seats[color].name = newName;
@@ -351,8 +356,7 @@ const handlers = {
   },
 
   move(socket, { from, to, promotion }) {
-    const room = socket.room;
-    const color = room && sockets.get(room.code).get(socket);
+    const { room, color } = seatOf(socket);
     if (!room?.game || !color) throw new Error('You are not playing in this game');
     updateGame(room, (game) => {
       if (game.turn !== color) throw new Error('It is not your turn');
@@ -362,8 +366,7 @@ const handlers = {
 
   // Anyone with the link can read the chat, but only seated players can write in it.
   chat(socket, { text }) {
-    const room = socket.room;
-    const color = room && sockets.get(room.code).get(socket);
+    const { room, color } = seatOf(socket);
     if (!room?.game || !color) throw new Error('Only players can chat');
     const clean = String(text ?? '').trim().slice(0, MAX_CHAT_LENGTH);
     if (!clean) return;
@@ -380,8 +383,7 @@ const handlers = {
   // Asks the others to let you take back your last move. Everyone still in the game before
   // that move gets a vote, including anyone it knocked out.
   takeback(socket) {
-    const room = socket.room;
-    const color = room && sockets.get(room.code).get(socket);
+    const { room, color } = seatOf(socket);
     if (!room?.game || !color) throw new Error('You are not playing in this game');
     if (!canTakeBack(room, color)) throw new Error('You can only ask once, before the next move');
     room.undo.asked = true;
@@ -393,8 +395,7 @@ const handlers = {
 
   // Withdraws your own pending request. You still can't ask again until the next move.
   cancelTakeback(socket) {
-    const room = socket.room;
-    const color = room && sockets.get(room.code).get(socket);
+    const { room, color } = seatOf(socket);
     if (!room?.takeback || room.undo?.by !== color) throw new Error('You have no takeback request to cancel');
     endTakeback(room, `${room.seats[color].name} cancelled the takeback request`);
     touch(room);
@@ -402,8 +403,7 @@ const handlers = {
   },
 
   answerTakeback(socket, { accept }) {
-    const room = socket.room;
-    const color = room && sockets.get(room.code).get(socket);
+    const { room, color } = seatOf(socket);
     const request = room?.takeback;
     if (!request || !request.voters.includes(color)) throw new Error('There is nothing for you to answer');
     if (request.accepted.includes(color)) throw new Error('You already agreed');
@@ -439,8 +439,7 @@ const handlers = {
   },
 
   resign(socket) {
-    const room = socket.room;
-    const color = room && sockets.get(room.code).get(socket);
+    const { room, color } = seatOf(socket);
     if (!room?.game || !color) throw new Error('You are not playing in this game');
     updateGame(room, (game) => resign(game, color));
   },

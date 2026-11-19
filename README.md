@@ -24,7 +24,9 @@ Move pieces by dragging them or by clicking the piece and then its destination. 
 dropped on an illegal square goes back where it started.
 
 During a game, click any move in the history or use the left and right arrow keys to
-look at past positions. Moves can only be made from the latest position.
+look at past positions. Moves can only be made from the latest position. When the move
+comes round to you in an online game, a short chime plays (unless you choose "Mute
+sounds" in the ⋯ menu) and the tab's title says so.
 
 The buttons are the same everywhere: back and forward a move, and the takeback button on
 top; back to the start, to the latest move, and the ⋯ menu below. The menu holds the rest:
